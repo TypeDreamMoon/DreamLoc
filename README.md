@@ -77,7 +77,10 @@ target language's `.dloc` files up to date:
   `dloc migrate` moves it;
 - a source moved with its keys: its translations move to the new file and the old file goes;
 - a translation written by hand somewhere else moves to its file once a manifest has its key; translations of a
-  source that exists but was not compiled are left alone.
+  source that exists but was not compiled are left alone;
+- a key the source tool numbers by position (`"stable": false` in the manifest: a DreamNarrative line without an
+  `#id`) whose translation was made from another source gets a warning (DLOC3030): a line put in before it moves every
+  key after it onto its neighbour's text, which only looks like edits. Give the texts ids (`dnc freeze`).
 
 `dloc import-engine -Target Game` takes the translations an engine localization target already has
 (`Content/Localization/Game/<language>/Game.archive`) into the `.dloc` files once, so the localization dashboard is
@@ -137,10 +140,12 @@ Polish, reads them in Polish, and writes what it saw for the script to compare.
 `dloc export -Culture en` writes what needs a translator -- by default what has no translation and what is stale;
 `-Only` picks others (`machine`, `draft`, `done`, `all`), `-Files` one screen's file, `-Reference ja` adds Japanese
 beside each -- as JSON (for an AI), XLIFF 1.2, PO or CSV. Each entry has its source text, note, `max`, where it comes
-from, the texts around it in its file, the culture's terms the source uses and the words it keeps, and for a stale
-entry the old source and its translation. `dloc import -In <file>` brings the translations back by namespace and key:
-`-State machine` marks them, a reviewed translation (`state done`) stays unless `-Force`, and a translation made for
-a source text that has changed since comes in stale.
+from, what the source tool says about it (its manifest's `kind` and `context`: who speaks a line, the line before it,
+what each `{0}` is), the texts around it in its file, the culture's terms the source uses and the words it keeps, and
+for a stale entry the old source and its translation. `dloc import -In <file>` brings the translations back by
+namespace and key: `-State machine` marks them, a reviewed translation (`state done`) stays unless `-Force`, and a
+translation made for a source text that has changed since comes in stale. A CSV's columns are found by name, so
+DreamNarrative's old `dnc loc-export` file imports too (it names no culture: give `-Culture`).
 
 For an AI the JSON is the whole job: it carries its own instructions (keep the arguments and tags, the plural forms
 the language needs, the length, the terms), and the model only fills in each entry's `text`:
