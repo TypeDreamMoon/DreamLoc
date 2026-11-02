@@ -115,7 +115,7 @@ bool FDreamLocBakedLayerTest::RunTest(const FString& Parameters)
 
 	// A mod: Polish of its own, and an English text over the project's.
 	WriteFile(Work / TEXT("Mod/pl/Menu.dloc"), MenuFile(TEXT("pl"), TEXT("Rozpocznij"), nullptr));
-	WriteFile(Work / TEXT("Mod/en/Menu.dloc"), TEXT("dloc 1\nculture en\nnamespace Game.Menu\n\nOptions {\n    src   \"选项\"\n    text  \"Settings\"\n}\n"));
+	WriteFile(Work / TEXT("Mod/en/Menu.dloc"), TEXT("dloc 1\nculture en\nnamespace Game.Menu\n\nStart {\n    src   \"开始\"\n    text  \"Play\"\n}\n\nOptions {\n    src   \"选项\"\n    text  \"Settings\"\n}\n"));
 
 	FDreamLocLayer Baked{ 1, TEXT("Project"), Work / TEXT("Baked") };
 	Baked.bBaked = true;
@@ -123,7 +123,7 @@ bool FDreamLocBakedLayerTest::RunTest(const FString& Parameters)
 
 	FTextLocalizationResource English;
 	Source.LoadLocalizedResources(ELocalizationLoadFlags::Game, TArray<FString>{ TEXT("en") }, English, English);
-	TestEqual(TEXT("the baked translation"), TextOf(English, TEXT("Start")), FString(TEXT("Start")));
+	TestEqual(TEXT("the mod's over the baked translation"), TextOf(English, TEXT("Start")), FString(TEXT("Play")));
 	TestEqual(TEXT("the mod's, where the project has none"), TextOf(English, TEXT("Options")), FString(TEXT("Settings")));
 	const FTextLocalizationResource::FEntry* Quit = FindEntry(English, TEXT("Quit"));
 	TestTrue(TEXT("a baked stale translation stays stale"), Quit != nullptr && Quit->SourceStringHash == FTextLocalizationResource::HashString(TEXT("退出游戏")));
