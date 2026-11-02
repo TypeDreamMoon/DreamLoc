@@ -46,6 +46,17 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 
 	FString Section;
 	bool bTargetCulturesReset = false;
+	// A list key written without `+` replaces the default the first time it is seen; after that every line adds.
+	TSet<FString> ListsReset;
+	auto SetList = [&ListsReset](TArray<FString>& InOutList, const FString& InKey, const FString& InValue, bool bInAppend)
+	{
+		if (!bInAppend && !ListsReset.Contains(InKey))
+		{
+			InOutList.Reset();
+		}
+		ListsReset.Add(InKey);
+		SplitList(InValue, InOutList);
+	};
 	for (int32 LineIndex = 0; LineIndex < Lines.Num(); ++LineIndex)
 	{
 		const int32 LineNumber = LineIndex + 1;
@@ -67,10 +78,10 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 				continue;
 			}
 			Section = Line.Mid(1, Line.Len() - 2).TrimStartAndEnd();
-			if (Section != TEXT("DreamLoc") && Section != TEXT("Fallback"))
+			if (Section != TEXT("DreamLoc") && Section != TEXT("Fallback") && Section != TEXT("Gather"))
 			{
 				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-					FString::Printf(TEXT("DreamLoc does not read a [%s] section; the sections are [DreamLoc] and [Fallback]"), *Section));
+					FString::Printf(TEXT("DreamLoc does not read a [%s] section; the sections are [DreamLoc], [Fallback] and [Gather]"), *Section));
 			}
 			continue;
 		}
@@ -136,10 +147,30 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 				Settings.Fallbacks.Emplace(Key, Culture);
 			}
 		}
+		else if (Section == TEXT("Gather"))
+		{
+			if (Key == TEXT("SourcePaths"))
+			{
+				SetList(Settings.GatherSourcePaths, Key, Value, bAppend);
+			}
+			else if (Key == TEXT("ContentPaths"))
+			{
+				SetList(Settings.GatherContentPaths, Key, Value, bAppend);
+			}
+			else if (Key == TEXT("ExcludePaths"))
+			{
+				SetList(Settings.GatherExcludePaths, Key, Value, bAppend);
+			}
+			else
+			{
+				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
+					FString::Printf(TEXT("DreamLoc does not read '%s' in [Gather]; it reads SourcePaths, ContentPaths and ExcludePaths"), *Key));
+			}
+		}
 		else
 		{
 			OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-				FString::Printf(TEXT("'%s' is outside the [DreamLoc] and [Fallback] sections and is not read"), *Key));
+				FString::Printf(TEXT("'%s' is outside the [DreamLoc], [Fallback] and [Gather] sections and is not read"), *Key));
 		}
 	}
 	return Settings;

@@ -46,6 +46,18 @@ es-ES=es-419
 	FDreamLocSettings::Parse(TEXT("[DreamLoc]\nSourceLanguage=en\nnot a line\n[Other]\n"), Bad);
 	TestEqual(TEXT("an unknown key, a line that is not key=value, an unknown section"), DreamLocTestUtil::Describe(Bad),
 		FString(TEXT("DLOC1016@2:1 DLOC1015@3:1 DLOC1016@4:1")));
+
+	{
+		TArray<FDreamLocDiagnostic> GatherDiagnostics;
+		const FDreamLocSettings Defaults;
+		TestEqual(TEXT("the gather searches Source by default"), FString::Join(Defaults.GatherSourcePaths, TEXT(",")), FString(TEXT("Source")));
+		const FDreamLocSettings Gather = FDreamLocSettings::Parse(TEXT("[Gather]\nSourcePaths=Source/Game\n+SourcePaths=Plugins/Shop/Source\n+ExcludePaths=Content/Tests/*\nWhat=1\n"),
+			GatherDiagnostics);
+		TestEqual(TEXT("a list key replaces the default, + adds to it"), FString::Join(Gather.GatherSourcePaths, TEXT(",")),
+			FString(TEXT("Source/Game,Plugins/Shop/Source")));
+		TestEqual(TEXT("+ alone adds to the default"), Gather.GatherExcludePaths.Num(), 4);
+		TestEqual(TEXT("an unknown [Gather] key"), DreamLocTestUtil::Describe(GatherDiagnostics), FString(TEXT("DLOC1016@5:1")));
+	}
 	return true;
 }
 
