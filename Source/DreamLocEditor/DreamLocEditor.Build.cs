@@ -11,6 +11,6 @@ public class DreamLocEditor : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DreamLoc" });
-		PrivateDependencyModuleNames.AddRange(new string[] { "DirectoryWatcher", "Projects" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "DirectoryWatcher", "Projects", "Json" });
 	}
 }
