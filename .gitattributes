@@ -1,0 +1,3 @@
+# Text is stored and checked out with LF line ends, whatever the machine's core.autocrlf says: the .dloc files
+# and the tests' expected texts are compared byte for byte.
+* text=auto eol=lf

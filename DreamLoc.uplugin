@@ -1,0 +1,35 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Dream Loc",
+	"Description": "Localization authored as text. Translations live in .dloc files under DLoc/<culture>/ and are handed to the engine's FText translation table, so DreamGUI, UMG, C++ and DataTable text are translated from one place.",
+	"Category": "DreamPlugin",
+	"CreatedBy": "DreamMoon",
+	"CreatedByURL": "https://dmstudio.top",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"EnabledByDefault": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "DreamLoc",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		},
+		{
+			"Name": "DreamLocEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "DreamLocTests",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
