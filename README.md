@@ -133,7 +133,8 @@ whose translations nobody needs any more. A plugin keeps its own texts with `dlo
 
 With DreamNarrative in the test host too (a worktree in `Plugins/DreamNarrative`, the plugin enabled in the
 `.uproject`, the `.dna` under `DNarrative/`), `DreamLocHost.Acceptance.DreamNarrative.*` takes a chapter through DLoc:
-first `dnc.ps1 build` and `dnc.ps1 loc-export` with `-Project <host> -Root <host>/DNarrative` (an absolute root), then
+first `dnc.ps1 build` and `dnc.ps1 loc-export` with `-Project <host>` (a DreamNarrative older than 029186f also needs
+`-Root <host>/DNarrative`, absolute, when the engine and the host share a drive), then
 the test syncs the chapter's manifest, imports the old CSV with its translations, checks, and reads the compiled
 chapter's texts under the English preview. Without DreamNarrative the test has nothing to check and says so.
 
