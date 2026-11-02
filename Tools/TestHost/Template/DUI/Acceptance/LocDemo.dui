@@ -1,0 +1,13 @@
+// The end-to-end check's interface: two texts written in Chinese, translated by DLoc/en/DUI/Acceptance/LocDemo.dloc.
+class /Game/Acceptance/WBP_LocDemo
+
+Widget Root {
+    Text Title {
+        Text = "设置"
+    }
+    Widget Footer {
+        Text Apply {
+            Text = "应用"
+        }
+    }
+}

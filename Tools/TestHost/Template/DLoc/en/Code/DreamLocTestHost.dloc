@@ -1,0 +1,16 @@
+// Text the end-to-end check makes in C++: one as LOCTEXT would, one on a UMG text block.
+dloc 1
+culture en
+namespace DreamLocTestHost
+
+Quit {
+    src   "退出"
+    text  "Quit"
+}
+
+namespace DreamLocTestHost.UMG
+
+Start {
+    src   "开始游戏"
+    text  "Start Game"
+}

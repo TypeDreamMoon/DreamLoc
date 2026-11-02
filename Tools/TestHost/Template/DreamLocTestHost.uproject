@@ -1,0 +1,32 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "Minimal host project that builds DreamLoc on its own and runs its automation tests, away from any working project. DreamGUI is in it too, for the end-to-end check that a .dui's text follows the .dloc files. Generated from Plugins/DreamLoc/Tools/TestHost/Template by New-DreamLocTestHost.ps1.",
+	"Modules": [
+		{
+			"Name": "DreamLocTestHost",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "DreamLocTestHostEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "DreamLoc",
+			"Enabled": true
+		},
+		{
+			"Name": "DreamGUI",
+			"Enabled": true
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		}
+	]
+}
