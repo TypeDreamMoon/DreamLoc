@@ -22,6 +22,8 @@ public class DreamLocTestHostEditor : ModuleRules
 			"DreamGUI",
 			"DreamGUIEditor",
 			"DreamLoc",
+			"DreamLocEditor",
+			"DreamLocTestHost",
 		});
 	}
 }
