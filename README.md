@@ -86,7 +86,7 @@ not needed any more.
 ## Command line
 
 ```
-pwsh -File Tools/dloc.ps1 check                 # read every .dloc and report what does not read (DLOCnnnn)
+pwsh -File Tools/dloc.ps1 check [-WithSync]     # every check (DLOCnnnn); -WithSync adds what a dry-run sync says
 pwsh -File Tools/dloc.ps1 fmt -Write            # rewrite the files into the canonical layout
 pwsh -File Tools/dloc.ps1 show -Culture en      # the translations the engine would get, and from which file
 pwsh -File Tools/dloc.ps1 gather                # the engine's text gather into Engine extraction manifests
@@ -100,8 +100,29 @@ The test host is made by `Tools/TestHost/New-DreamLocTestHost.ps1`. It has Dream
 checks that a `.dui`'s text follows the `.dloc` files and keeps its translations through renames and moves; DreamLoc
 itself depends on neither DreamGUI nor anything else of the Dream plugins.
 
+## Checks
+
+`dloc check` reports, as `<file>(<line>,<col>): error DLOCnnnn: ...`:
+
+- **1xxx**, what does not read: strings, escapes, fields and their values, duplicate keys, blocks, the header; a
+  `culture` line against its folder, a folder that is no culture, a translation without a source text; `dloc.ini`.
+- **2xxx**, each translation against its `src`: its format arguments (none missing, none added); the plural forms
+  its culture needs (the engine's own pattern check: Russian needs one / few / many / other, Japanese has one and a
+  `plural` there is only a warning); a pattern the engine cannot format; rich-text tags in pairs and the same as the
+  source's; blanks at either end; line breaks; `max` (a full-width character counts 2, arguments nothing, a plural
+  its widest form); the culture's terms (`_terms.dloc`).
+- **3xxx**, the files against each other and the sources: a stale translation, a removed block, a key in two files
+  of a culture, a mod translating a key differently from the project, how much of each culture is untranslated;
+  with `-WithSync`, rename candidates, conflicting sources, sources never compiled and files sync would change.
+
+`Tests/Check/` holds a deliberately broken sample for each, saying in `// expect:` comments what the check reports
+and where; `DreamLoc.Check.SamplesReportWhatTheySay` holds the check to it. The VS Code extension
+[dreamloc-language-support](https://github.com/TypeDreamMoon/dreamloc-language-support) runs the same checks as you
+type (all but the plural forms and the project-wide ones) and `dloc check` on request.
+
 ## Status
 
 Done: the file format, the text source, `dloc.ini`, hot reload in the editor, check / fmt / show, sync with key
-migration, the engine's gather, and the import of engine localization targets. Still to come: baking to locres for
-shipping, export and import of PO / XLIFF / CSV, `dloc prune`, and the content checks.
+migration, the engine's gather, the import of engine localization targets, and the checks. Still to come: baking to
+locres for shipping, mod layers, export and import of PO / XLIFF / CSV, `dloc prune`, and DreamGUI's own checks
+(overflow and missing glyphs in the real widget).
