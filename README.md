@@ -93,12 +93,65 @@ pwsh -File Tools/dloc.ps1 gather                # the engine's text gather into 
 pwsh -File Tools/dloc.ps1 sync [-Gather]        # bring the .dloc files up to date with the manifests
 pwsh -File Tools/dloc.ps1 migrate -From Old.Text -To New.Text
 pwsh -File Tools/dloc.ps1 import-engine -Target Game
+pwsh -File Tools/dloc.ps1 bake                  # the translations into Content/Localization/DreamLoc for packaging
+pwsh -File Tools/dloc.ps1 export -Culture en    # what has no translation yet, as JSON for an AI (or -Format xliff/po/csv)
+pwsh -File Tools/dloc.ps1 import -In Saved/DLoc/en-batch.json -State machine
+pwsh -File Tools/dloc.ps1 prune                 # delete the removed blocks
+pwsh -File Tools/dloc.ps1 freeze                # record the keys as shipped: a sync that loses one fails
 pwsh -File Tools/dloc.ps1 test                  # build the test host and run the automation tests
 ```
 
 The test host is made by `Tools/TestHost/New-DreamLocTestHost.ps1`. It has DreamGUI in it too, for the end-to-end
 checks that a `.dui`'s text follows the `.dloc` files and keeps its translations through renames and moves; DreamLoc
 itself depends on neither DreamGUI nor anything else of the Dream plugins.
+
+## Shipping
+
+`dloc bake` writes what a packaged game reads into `Content/Localization/DreamLoc/`: a `DreamLoc.locres` per target
+culture (the project's translations over the plugins', the `dloc.ini` fallbacks filled in, a stale translation
+under the hash of its old source so it still shows the source), the source culture's own file mapping every text to
+its source, and `DreamLoc.locmeta`. The engine's staging packages that folder like any localization target, for the
+cultures in *Project Settings > Packaging > Localizations to Package* (`CulturesToStage`); bake warns about a culture
+it bakes that is not staged.
+
+`dloc.ini` `[Publish] Mode` says who reads them in the packaged game:
+
+- `Source` (default): DreamLoc, when there is no `DLoc/` folder. Mods go over them: a plugin of the project's `Mods/`
+  folder, or one mounted while the game runs (DLC, user mods: `IPluginManager::MountNewlyCreatedPlugin`), with a
+  `DLoc/` folder is a layer of its own, and its cultures -- a language the game itself does not have -- join the
+  game's language list.
+- `Native`: the engine, with `+LocalizationPaths=%GAMEDIR%Content/Localization/DreamLoc` in `[Internationalization]`
+  of `DefaultGame.ini` (bake warns when it is missing). DreamLoc leaves the baked files alone. Mods are for `Source`.
+
+Once a version is out, `dloc freeze` records its keys in `DLoc/dloc.frozen`: a later sync that finds one of them gone
+from the sources, and not renamed, writes nothing and says so (DLOC3022). `dloc prune` deletes the removed blocks
+whose translations nobody needs any more. A plugin keeps its own texts with `dloc gather -Plugin <name>` and
+`dloc sync -Plugin <name>`, into its own `DLoc/` folder (with its own `dloc.ini`, or the project's cultures).
+
+`Tools/TestHost/Test-Package.ps1` packages the test host, Development and Shipping, finds the baked files in the pak
+and runs each package with `-DreamLocProbe`: it reads its texts in Chinese and English, mounts a mod that brings
+Polish, reads them in Polish, and writes what it saw for the script to compare.
+
+## Translating outside the files
+
+`dloc export -Culture en` writes what needs a translator -- by default what has no translation and what is stale;
+`-Only` picks others (`machine`, `draft`, `done`, `all`), `-Files` one screen's file, `-Reference ja` adds Japanese
+beside each -- as JSON (for an AI), XLIFF 1.2, PO or CSV. Each entry has its source text, note, `max`, where it comes
+from, the texts around it in its file, the culture's terms the source uses and the words it keeps, and for a stale
+entry the old source and its translation. `dloc import -In <file>` brings the translations back by namespace and key:
+`-State machine` marks them, a reviewed translation (`state done`) stays unless `-Force`, and a translation made for
+a source text that has changed since comes in stale.
+
+For an AI the JSON is the whole job: it carries its own instructions (keep the arguments and tags, the plural forms
+the language needs, the length, the terms), and the model only fills in each entry's `text`:
+
+```
+pwsh -File Tools/dloc.ps1 export -Culture en -Files DUI/UI/Settings
+(the model translates Saved/DLoc/en-batch.json)
+pwsh -File Tools/dloc.ps1 import -In Saved/DLoc/en-batch.json -State machine
+pwsh -File Tools/dloc.ps1 check
+(a person reviews, fixes what check reports, and sets state done)
+```
 
 ## Checks
 
@@ -122,7 +175,7 @@ type (all but the plural forms and the project-wide ones) and `dloc check` on re
 
 ## Status
 
-Done: the file format, the text source, `dloc.ini`, hot reload in the editor, check / fmt / show, sync with key
-migration, the engine's gather, the import of engine localization targets, and the checks. Still to come: baking to
-locres for shipping, mod layers, export and import of PO / XLIFF / CSV, `dloc prune`, and DreamGUI's own checks
-(overflow and missing glyphs in the real widget).
+Done: the file format, the text source, `dloc.ini`, hot reload in the editor, sync with key migration, the engine's
+gather and the import of its localization targets, the checks, bake with Source and Native shipping, mod layers,
+prune and freeze, and export / import for AI, XLIFF, PO and CSV. Still to come: DreamGUI's own checks (overflow and
+missing glyphs measured in the real widget), and DreamNarrative.
