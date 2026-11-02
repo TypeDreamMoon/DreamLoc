@@ -10,6 +10,6 @@ public class DreamLocTests : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DreamLoc", "DreamLocEditor" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "DreamLoc", "DreamLocEditor", "Localization" });
 	}
 }
