@@ -71,8 +71,16 @@ namespace DreamLocCode
 	inline constexpr int32 SourceNotExtracted = 3008;
 	/** A .dloc that does not read, or no target culture: nothing is written. */
 	inline constexpr int32 SyncBlocked = 3009;
+	/** An imported translation was made for another source text than the current one: it is imported as stale. */
+	inline constexpr int32 ImportedStale = 3010;
+	/** An imported translation that would replace a reviewed one: kept out (-Force lets it in). */
+	inline constexpr int32 ImportKept = 3011;
+	/** Imported translations of keys no .dloc has: written to Engine/Imported/<target>.dloc until a sync finds their place. */
+	inline constexpr int32 ImportUnplaced = 3012;
 	/** `dloc migrate` was given a key that is not there, or more than one. */
 	inline constexpr int32 MigrateNotFound = 3013;
+	/** The engine's gather did not finish. */
+	inline constexpr int32 GatherFailed = 3014;
 }
 
 /** One finding about one file. Line and column are 1-based; a line of 0 is about the whole file. */
