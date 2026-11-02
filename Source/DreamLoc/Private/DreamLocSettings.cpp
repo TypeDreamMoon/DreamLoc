@@ -78,10 +78,10 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 				continue;
 			}
 			Section = Line.Mid(1, Line.Len() - 2).TrimStartAndEnd();
-			if (Section != TEXT("DreamLoc") && Section != TEXT("Fallback") && Section != TEXT("Gather"))
+			if (Section != TEXT("DreamLoc") && Section != TEXT("Fallback") && Section != TEXT("Gather") && Section != TEXT("Publish"))
 			{
 				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-					FString::Printf(TEXT("DreamLoc does not read a [%s] section; the sections are [DreamLoc], [Fallback] and [Gather]"), *Section));
+					FString::Printf(TEXT("DreamLoc does not read a [%s] section; the sections are [DreamLoc], [Fallback], [Gather] and [Publish]"), *Section));
 			}
 			continue;
 		}
@@ -167,10 +167,27 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 					FString::Printf(TEXT("DreamLoc does not read '%s' in [Gather]; it reads SourcePaths, ContentPaths and ExcludePaths"), *Key));
 			}
 		}
+		else if (Section == TEXT("Publish"))
+		{
+			if (Key == TEXT("Mode") && (Value.Equals(TEXT("Source"), ESearchCase::IgnoreCase) || Value.Equals(TEXT("Native"), ESearchCase::IgnoreCase)))
+			{
+				Settings.bPublishNative = Value.Equals(TEXT("Native"), ESearchCase::IgnoreCase);
+			}
+			else if (Key == TEXT("Mode"))
+			{
+				OutDiagnostics.Emplace(EDreamLocSeverity::Error, DreamLocCode::SettingsSyntax, LineNumber, 1,
+					FString::Printf(TEXT("[Publish] Mode is Source or Native, not '%s'"), *Value));
+			}
+			else
+			{
+				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
+					FString::Printf(TEXT("DreamLoc does not read '%s' in [Publish]; it reads Mode"), *Key));
+			}
+		}
 		else
 		{
 			OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-				FString::Printf(TEXT("'%s' is outside the [DreamLoc], [Fallback] and [Gather] sections and is not read"), *Key));
+				FString::Printf(TEXT("'%s' is outside the [DreamLoc], [Fallback], [Gather] and [Publish] sections and is not read"), *Key));
 		}
 	}
 	return Settings;

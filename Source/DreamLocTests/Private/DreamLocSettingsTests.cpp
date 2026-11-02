@@ -58,6 +58,13 @@ es-ES=es-419
 		TestEqual(TEXT("+ alone adds to the default"), Gather.GatherExcludePaths.Num(), 4);
 		TestEqual(TEXT("an unknown [Gather] key"), DreamLocTestUtil::Describe(GatherDiagnostics), FString(TEXT("DLOC1016@5:1")));
 	}
+	{
+		TArray<FDreamLocDiagnostic> PublishDiagnostics;
+		TestFalse(TEXT("Source by default"), FDreamLocSettings().bPublishNative);
+		TestTrue(TEXT("Native"), FDreamLocSettings::Parse(TEXT("[Publish]\nMode=Native\n"), PublishDiagnostics).bPublishNative);
+		FDreamLocSettings::Parse(TEXT("[Publish]\nMode=Loose\nHow=1\n"), PublishDiagnostics);
+		TestEqual(TEXT("a mode that is none, a key that is not read"), DreamLocTestUtil::Describe(PublishDiagnostics), FString(TEXT("DLOC1015@2:1 DLOC1016@3:1")));
+	}
 	return true;
 }
 

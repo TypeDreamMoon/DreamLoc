@@ -21,6 +21,11 @@
  *   ExcludePaths=...               ; path patterns left out, `*` the wildcard (default: the folders of editor modules
  *                                  ; under Source, Content/Developers and Content/Localization)
  *
+ *   [Publish]
+ *   Mode=Source                    ; how a packaged game gets the translations `dloc bake` writes (default Source):
+ *                                  ; Source, DreamLoc reads them and mods' .dloc files go over them; Native, the
+ *                                  ; engine reads them itself (Content/Localization/DreamLoc in LocalizationPaths)
+ *
  * A comment is a line starting with `;` or `#`, or the rest of a line after ` ;`. Missing file, missing keys: the
  * defaults. A list key replaces the default; `+Key=` adds to it. The file is read by DreamLoc alone, never by the
  * engine's config system: it sits with the translations, not in Config/, so a translator's checkout carries it.
@@ -39,6 +44,8 @@ struct DREAMLOC_API FDreamLocSettings
 	TArray<FString> GatherContentPaths = { TEXT("Content") };
 	/** Path patterns (`*` matches anything) the engine gather leaves out, relative to the project. */
 	TArray<FString> GatherExcludePaths = { TEXT("Source/*Editor/*"), TEXT("Content/Developers/*"), TEXT("Content/Localization/*") };
+	/** A packaged game's translations are read by the engine itself rather than by DreamLoc ([Publish] Mode=Native). */
+	bool bPublishNative = false;
 
 	/** The file name, in the DLoc/ folder. */
 	static constexpr const TCHAR* FileName = TEXT("dloc.ini");
