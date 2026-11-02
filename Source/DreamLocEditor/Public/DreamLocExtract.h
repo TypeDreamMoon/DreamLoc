@@ -24,6 +24,17 @@
  * `"namespaces": [{ "namespace": ..., "entries": [...] }]` instead of the two keys. DreamLoc never reads a source file
  * itself: what to translate is what the manifests say.
  */
+/** One `context` member of a manifest entry: a string, or a list of strings (`"args": ["金币数", "玩家名"]`). */
+struct DREAMLOCEDITOR_API FDreamLocExtractContext
+{
+	FString Name;
+	TArray<FString> Values;
+	bool bList = false;
+
+	/** As a translator reads it: the string, or the list as `{0} 金币数, {1} 玩家名` for args and `a, b` otherwise. */
+	FString Describe() const;
+};
+
 struct DREAMLOCEDITOR_API FDreamLocExtractEntry
 {
 	FString Key;
@@ -38,6 +49,13 @@ struct DREAMLOCEDITOR_API FDreamLocExtractEntry
 	FString Kind;
 	/** The key this text had before, when the tool knows it was renamed. Same namespace. */
 	FString RenamedFrom;
+	/**
+	 * False for a key the tool numbers by position (`dialogue.3`): a text inserted before it moves every key after it
+	 * onto its neighbour's text, which sync can only see as sources that changed.
+	 */
+	bool bStable = true;
+	/** For translators: what the tool knows about the text -- the speaker, the dialogue, what each argument is. */
+	TArray<FDreamLocExtractContext> Context;
 };
 
 struct DREAMLOCEDITOR_API FDreamLocExtractNamespace

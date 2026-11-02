@@ -67,6 +67,33 @@ namespace DreamLocExtractLocal
 		{
 			Members.Add(FString::Printf(TEXT("\"renamedFrom\": %s"), *Quote(InEntry.RenamedFrom)));
 		}
+		if (!InEntry.bStable)
+		{
+			Members.Add(TEXT("\"stable\": false"));
+		}
+		if (InEntry.Context.Num() > 0)
+		{
+			TArray<FString> Items;
+			for (const FDreamLocExtractContext& Context : InEntry.Context)
+			{
+				FString Value;
+				if (Context.bList)
+				{
+					TArray<FString> Quoted;
+					for (const FString& Element : Context.Values)
+					{
+						Quoted.Add(Quote(Element));
+					}
+					Value = TEXT("[") + FString::Join(Quoted, TEXT(", ")) + TEXT("]");
+				}
+				else
+				{
+					Value = Quote(Context.Values.Num() > 0 ? Context.Values[0] : FString());
+				}
+				Items.Add(FString::Printf(TEXT("%s: %s"), *Quote(Context.Name), *Value));
+			}
+			Members.Add(TEXT("\"context\": { ") + FString::Join(Items, TEXT(", ")) + TEXT(" }"));
+		}
 		return TEXT("{ ") + FString::Join(Members, TEXT(", ")) + TEXT(" }");
 	}
 
@@ -119,9 +146,60 @@ namespace DreamLocExtractLocal
 			{
 				Entry.Max = Max;
 			}
+			bool bStable = true;
+			if ((*Object)->TryGetBoolField(TEXT("stable"), bStable))
+			{
+				Entry.bStable = bStable;
+			}
+			const TSharedPtr<FJsonObject>* Context = nullptr;
+			if ((*Object)->TryGetObjectField(TEXT("context"), Context) && Context != nullptr && Context->IsValid())
+			{
+				for (const TPair<FString, TSharedPtr<FJsonValue>>& Member : (*Context)->Values)
+				{
+					if (!Member.Value.IsValid() || Member.Value->IsNull())
+					{
+						continue;
+					}
+					FDreamLocExtractContext& Item = Entry.Context.AddDefaulted_GetRef();
+					Item.Name = Member.Key;
+					const TArray<TSharedPtr<FJsonValue>>* List = nullptr;
+					if (Member.Value->TryGetArray(List) && List != nullptr)
+					{
+						Item.bList = true;
+						for (const TSharedPtr<FJsonValue>& Element : *List)
+						{
+							FString Text;
+							if (Element.IsValid() && Element->TryGetString(Text))
+							{
+								Item.Values.Add(Text);
+							}
+						}
+					}
+					else
+					{
+						FString Text;
+						Member.Value->TryGetString(Text);
+						Item.Values.Add(Text);
+					}
+				}
+			}
 		}
 		return true;
 	}
+}
+
+FString FDreamLocExtractContext::Describe() const
+{
+	if (!bList)
+	{
+		return Values.Num() > 0 ? Values[0] : FString();
+	}
+	TArray<FString> Items;
+	for (int32 Index = 0; Index < Values.Num(); ++Index)
+	{
+		Items.Add(Name == TEXT("args") ? FString::Printf(TEXT("{%d} %s"), Index, *Values[Index]) : Values[Index]);
+	}
+	return FString::Join(Items, TEXT(", "));
 }
 
 int32 FDreamLocExtractManifest::NumEntries() const
