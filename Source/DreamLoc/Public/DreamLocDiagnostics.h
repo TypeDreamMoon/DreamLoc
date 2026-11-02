@@ -132,6 +132,8 @@ namespace DreamLocCode
 	inline constexpr int32 ImportUnreadable = 3028;
 	/** What `dloc import` put into the files. */
 	inline constexpr int32 Imported = 3029;
+	/** A translated key the source tool numbers by position (`stable: false`) has a new source: maybe every key after an inserted text shifted. */
+	inline constexpr int32 PositionalKeyChanged = 3030;
 }
 
 /** One finding about one file. Line and column are 1-based; a line of 0 is about the whole file. */

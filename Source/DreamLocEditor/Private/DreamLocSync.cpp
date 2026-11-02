@@ -842,6 +842,8 @@ FDreamLocSyncOutput DreamLocSync::Run(const FDreamLocSyncInput& InInput)
 	}
 
 	// ---- Each culture: who takes which entry, then the files.
+	// A key numbered by position whose source changed under a translation: said once, whichever culture has it.
+	TSet<FString> ShiftReported;
 	for (FCultureState& Culture : Cultures)
 	{
 		struct FPlanned
@@ -967,6 +969,17 @@ FDreamLocSyncOutput DreamLocSync::Run(const FDreamLocSyncInput& InInput)
 					{
 						// The source is back to what the translation was made from.
 						Entry.Remove(EDreamLocField::Prev);
+					}
+					// A key numbered by position with a translation of another source: maybe not an edit but a shift.
+					const FString* MadeFrom = Entry.Find(EDreamLocField::Prev);
+					const FString ShiftId = Text.Id.Namespace + TEXT("\x01") + Text.Id.Key;
+					if (!Text.Entry.bStable && Entry.IsTranslated() && MadeFrom != nullptr && !ShiftReported.Contains(ShiftId))
+					{
+						ShiftReported.Add(ShiftId);
+						AddMessage(Output.Messages, SourceName(Unit.Source), EDreamLocSeverity::Warning, DreamLocCode::PositionalKeyChanged, FString::Printf(
+							TEXT("'%s' (namespace %s) is numbered by its position, and its translation was made from \"%s\", now \"%s\": if a text was added ")
+							TEXT("or removed before it, the translations after it sit on their neighbours' texts. Give the texts ids of their own in the source ")
+							TEXT("tool (DreamNarrative: dnc freeze)"), *Text.Id.Key, *Text.Id.Namespace, **MadeFrom, *Text.Entry.Source));
 					}
 					Entry.Set(EDreamLocField::Src, Text.Entry.Source);
 					AppendGrouped(Document.Items, LastNamespace, bHasNamespace, Text.Id.Namespace, MoveTemp(Entry), BaseNamespaces.FindRef(Text.Id.Namespace));
