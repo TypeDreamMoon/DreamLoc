@@ -3,6 +3,7 @@
 #include "DreamLocSync.h"
 
 #include "DreamLocFile.h"
+#include "DreamLocPublish.h"
 #include "DreamLocSettings.h"
 #include "DreamLocTextSource.h"
 #include "HAL/FileManager.h"
@@ -819,6 +820,27 @@ FDreamLocSyncOutput DreamLocSync::Run(const FDreamLocSyncInput& InInput)
 		}
 	}
 
+	// ---- A shipped key that is gone and became nothing: a translation players have would stop showing.
+	if (InInput.Frozen.Num() > 0)
+	{
+		for (const FId& Id : VanishedOrder)
+		{
+			if (!RenamedFrom.Contains(Id) && InInput.Frozen.Contains(Id.Namespace + TEXT("\x01") + Id.Key))
+			{
+				Output.bBlocked = true;
+				const FPrevious& Info = Previous.FindChecked(Id);
+				AddMessage(Output.Messages, SourceName(DreamLocExtract::GetAtSource(Info.At)), EDreamLocSeverity::Error, DreamLocCode::FrozenKeyGone, FString::Printf(
+					TEXT("%s was frozen as shipped and is gone from the source; bring it back, rename it with (was: ...), or run dloc freeze again to let it go"),
+					*Describe(Id)));
+			}
+		}
+		if (Output.bBlocked)
+		{
+			AddMessage(Output.Messages, InInput.DLocName, EDreamLocSeverity::Error, DreamLocCode::SyncBlocked, TEXT("nothing was written: a frozen key is gone"));
+			return Output;
+		}
+	}
+
 	// ---- Each culture: who takes which entry, then the files.
 	for (FCultureState& Culture : Cultures)
 	{
@@ -1197,6 +1219,7 @@ FDreamLocSyncOutput DreamLocSync::SyncDirectory(const FDirectoryOptions& InOptio
 	Input.SourceExists = [Owner](const FString& InSource) { return IFileManager::Get().FileExists(*(Owner / InSource)); };
 	Input.SourceScope = InOptions.SourceFilter;
 	Input.Files = ReadFiles(DLocDirectory, Input.Cultures);
+	Input.Frozen = DreamLocPublish::ReadFrozen(DLocDirectory);
 
 	TArray<FDreamLocReportLine> Early = MoveTemp(Output.Messages);
 	Output = Run(Input);

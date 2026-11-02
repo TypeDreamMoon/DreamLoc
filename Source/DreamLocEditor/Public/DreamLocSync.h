@@ -32,6 +32,8 @@ struct DREAMLOCEDITOR_API FDreamLocSyncInput
 	TSet<FString> CompleteProviders;
 	/** Only texts of sources under these paths are decided about; the others are left as they are. Empty: all. */
 	TArray<FString> SourceScope;
+	/** Keys `dloc freeze` recorded as shipped (`namespace` + U+0001 + `key`): one of them gone, not renamed, blocks the run. */
+	TSet<FString> Frozen;
 	/** How much of a vanished namespace's (key, source text) pairs must turn up in a new namespace for all of it to move. */
 	float NamespaceThreshold = 0.8f;
 	/** The name report lines give the DLoc folder: `DLoc/en/DUI/UI/Settings.dloc`. */
