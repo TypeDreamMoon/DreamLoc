@@ -114,6 +114,24 @@ namespace DreamLocCode
 	inline constexpr int32 LayerOverride = 3019;
 	/** The .dloc files are not up to date with the extraction manifests: dloc sync would change them. */
 	inline constexpr int32 NotSynced = 3020;
+	/** What `dloc bake` wrote for a culture. */
+	inline constexpr int32 Baked = 3021;
+	/** A key `dloc freeze` recorded as shipped has disappeared from the sources: sync writes nothing. */
+	inline constexpr int32 FrozenKeyGone = 3022;
+	/** The project's configuration does not match the [Publish] mode: the engine would not load the baked files, or would load them twice. */
+	inline constexpr int32 PublishConfig = 3023;
+	/** A culture DreamLoc bakes is not one the project stages when it is packaged (CulturesToStage). */
+	inline constexpr int32 CultureNotStaged = 3024;
+	/** What `dloc prune` deleted. */
+	inline constexpr int32 Pruned = 3025;
+	/** What `dloc export` wrote. */
+	inline constexpr int32 Exported = 3026;
+	/** An imported translation of a key no .dloc of the culture has: left out (sync makes the entry first). */
+	inline constexpr int32 ImportUnknownKey = 3027;
+	/** A file to import that is not the format its extension says, or does not read. */
+	inline constexpr int32 ImportUnreadable = 3028;
+	/** What `dloc import` put into the files. */
+	inline constexpr int32 Imported = 3029;
 }
 
 /** One finding about one file. Line and column are 1-based; a line of 0 is about the whole file. */
