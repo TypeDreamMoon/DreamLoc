@@ -16,8 +16,18 @@
 #                                     never rewritten
 #   dloc.ps1 show -Culture C [-Root R]
 #                                     the translations the engine would get for that culture, and from which file
+#   dloc.ps1 gather                   run the engine's text gather (C++ LOCTEXT, asset FTexts; dloc.ini [Gather])
+#                                     into Engine extraction manifests
+#   dloc.ps1 sync [-Gather] [-Culture C] [-DryRun]
+#                                     bring every target culture's .dloc files up to date with the extraction
+#                                     manifests: new keys, changed sources, renames, removed texts; -Gather first
+#                                     gathers; -Culture limits it to some cultures (comma-separated)
+#   dloc.ps1 migrate -From K -To K [-Namespace N] [-ToNamespace N] [-Force]
+#                                     move a translation sync would not move alone (it said so with DLOC3002)
+#   dloc.ps1 import-engine [-Target Game] [-NativeCulture C] [-Culture C] [-Force] [-DryRun]
+#                                     take the translations of an engine localization target into the .dloc files
 #
-# check, fmt and show run `UnrealEditor-Cmd <project> -run=DreamLoc` on -Project, else the project above -File,
+# Every command but make and test runs `UnrealEditor-Cmd <project> -run=DreamLoc` on -Project, else the project above -File,
 # else the project above the current directory, else the test host, and keep the lines that matter: diagnostics
 # (`<file>(<line>,<col>): error DLOCnnnn: ...`), the summary, errors and crashes (-Raw shows everything).
 # -File is a .dloc (absolute, relative to the current directory, or relative to the project directory). -Root
@@ -36,11 +46,12 @@
 #   test: 0 green, 1 red (a test failed or an ensure fired), 2 not judged (the build failed, the editor crashed or
 #         timed out, or no test ran). Results land in <host>/Saved/DreamLocTests/<time>/: the engine's index.json,
 #         the run log and summary.md.
-#   check, fmt, show: 0 no errors, 1 errors (fmt -Verify: a file not canonical), 2 the commandlet did not finish.
+#   check, fmt, show, gather, sync, migrate, import-engine: 0 no errors, 1 errors (fmt -Verify: a file not
+#         canonical), 2 the commandlet did not finish.
 
 [CmdletBinding()]
 param(
-    [Parameter(Position = 0)][ValidateSet('make', 'test', 'check', 'fmt', 'show')][string]$Command = 'test',
+    [Parameter(Position = 0)][ValidateSet('make', 'test', 'check', 'fmt', 'show', 'gather', 'sync', 'migrate', 'import-engine')][string]$Command = 'test',
     [string]$Filter,
     [switch]$NoBuild,
     [string]$Project,
@@ -52,6 +63,15 @@ param(
     [switch]$Write,
     [switch]$Verify,
     [switch]$Markers,
+    [switch]$Gather,
+    [switch]$DryRun,
+    [switch]$Force,
+    [string]$From,
+    [string]$To,
+    [string]$Namespace,
+    [string]$ToNamespace,
+    [string]$Target,
+    [string]$NativeCulture,
     [switch]$Raw,
     [ValidateSet('Idle', 'BelowNormal', 'Normal')][string]$Priority = 'BelowNormal'
 )
@@ -269,7 +289,19 @@ function Invoke-Commandlet {
     switch ($Command) {
         'fmt' { $arguments += '-Format' }
         'show' { $arguments += '-Show' }
+        'gather' { $arguments += '-Gather' }
+        'sync' { $arguments += '-Sync'; if ($Gather) { $arguments += '-Gather' } }
+        'migrate' { $arguments += '-Migrate' }
+        'import-engine' { $arguments += '-ImportEngine' }
     }
+    if ($DryRun) { $arguments += '-DryRun' }
+    if ($Force) { $arguments += '-Force' }
+    if ($From) { $arguments += Format-Switch 'From' $From }
+    if ($To) { $arguments += Format-Switch 'To' $To }
+    if ($Namespace) { $arguments += Format-Switch 'Namespace' $Namespace }
+    if ($ToNamespace) { $arguments += Format-Switch 'ToNamespace' $ToNamespace }
+    if ($Target) { $arguments += Format-Switch 'Target' $Target }
+    if ($NativeCulture) { $arguments += Format-Switch 'NativeCulture' $NativeCulture }
     if ($sourceFile) { $arguments += Format-Switch 'File' $sourceFile }
     if ($Root) { $arguments += Format-Switch 'Root' (($Root | ForEach-Object { $_.TrimEnd('\') }) -join ',') }
     if ($Culture) { $arguments += Format-Switch 'Culture' $Culture }

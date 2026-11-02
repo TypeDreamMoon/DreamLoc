@@ -3,8 +3,10 @@
 #include "DreamLocCommandlet.h"
 
 #include "DreamLocDiagnostics.h"
+#include "DreamLocEngine.h"
 #include "DreamLocFile.h"
 #include "DreamLocSettings.h"
+#include "DreamLocSync.h"
 #include "DreamLocTextSource.h"
 #include "HAL/FileManager.h"
 #include "Internationalization/Culture.h"
@@ -319,6 +321,124 @@ namespace DreamLocCommandletLocal
 			*FString::Join(Chain, TEXT(", ")));
 		return 0;
 	}
+
+	void ReportLines(const TArray<FDreamLocReportLine>& InLines)
+	{
+		for (const FDreamLocReportLine& Line : InLines)
+		{
+			UE_LOG(LogDreamLocCommandlet, Display, TEXT("%s"), *Line.Format());
+		}
+	}
+
+	int32 CountErrors(const TArray<FDreamLocReportLine>& InLines)
+	{
+		int32 Count = 0;
+		for (const FDreamLocReportLine& Line : InLines)
+		{
+			Count += Line.Diagnostic.IsError() ? 1 : 0;
+		}
+		return Count;
+	}
+
+	int32 CountWarnings(const TArray<FDreamLocReportLine>& InLines)
+	{
+		int32 Count = 0;
+		for (const FDreamLocReportLine& Line : InLines)
+		{
+			Count += Line.Diagnostic.Severity == EDreamLocSeverity::Warning ? 1 : 0;
+		}
+		return Count;
+	}
+
+	/** One line per file written or deleted, in path order. */
+	void ReportChanges(const FDreamLocSyncOutput& InOutput, const FString& InDLocDirectory, bool bInDryRun)
+	{
+		TArray<FString> Lines;
+		for (const TPair<FString, TMap<FString, TOptional<FString>>>& Culture : InOutput.Changes)
+		{
+			for (const TPair<FString, TOptional<FString>>& Change : Culture.Value)
+			{
+				const TCHAR* Verb = Change.Value.IsSet() ? (bInDryRun ? TEXT("would write") : TEXT("wrote")) : (bInDryRun ? TEXT("would delete") : TEXT("deleted"));
+				Lines.Add(FString::Printf(TEXT("%s %s"), Verb, *(InDLocDirectory / Culture.Key / Change.Key)));
+			}
+		}
+		Lines.Sort();
+		for (const FString& Line : Lines)
+		{
+			UE_LOG(LogDreamLocCommandlet, Display, TEXT("%s"), *Line);
+		}
+	}
+
+	TArray<FString> SplitCultures(const FString& InValue)
+	{
+		TArray<FString> Cultures;
+		InValue.ParseIntoArray(Cultures, TEXT(","), /*InCullEmpty*/ true);
+		for (FString& Culture : Cultures)
+		{
+			Culture.TrimStartAndEndInline();
+		}
+		return Cultures;
+	}
+
+	int32 RunGather()
+	{
+		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(FDreamLocTextSource::GetProjectDirectory());
+		const DreamLocEngine::FGatherResult Result = DreamLocEngine::Gather(DreamLocEngine::MakeGatherOptions(Settings));
+		ReportLines(Result.Messages);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc gather: %d text(s) in %d source file(s), %d manifest(s) written, %d deleted, %d error(s), %d warning(s)"),
+			Result.Texts, Result.Sources, Result.ManifestsWritten, Result.ManifestsDeleted, CountErrors(Result.Messages), CountWarnings(Result.Messages));
+		return Result.bSucceeded ? 0 : 1;
+	}
+
+	int32 RunSync(const FString& InCultures, bool bInDryRun)
+	{
+		DreamLocSync::FDirectoryOptions Options;
+		Options.OwnerDirectory = FPaths::ProjectDir();
+		Options.Cultures = SplitCultures(InCultures);
+		Options.bDryRun = bInDryRun;
+		const FDreamLocSyncOutput Output = DreamLocSync::SyncDirectory(Options);
+		ReportLines(Output.Messages);
+		ReportChanges(Output, FDreamLocTextSource::GetProjectDirectory(), bInDryRun);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc sync: %d file(s) %s, %d deleted; %d added, %d outdated, %d migrated, %d moved, %d revived, %d removed; %d error(s), %d warning(s)"),
+			Output.NumWrites(), bInDryRun ? TEXT("to write") : TEXT("written"), Output.NumDeletes(), Output.Added, Output.Outdated, Output.Migrated,
+			Output.Moved, Output.Revived, Output.Removed, Output.NumErrors(), Output.NumWarnings());
+		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
+	}
+
+	int32 RunMigrate(const DreamLocSync::FMigrateRequest& InRequest)
+	{
+		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
+		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		FDreamLocSyncOutput Output;
+		if (InRequest.FromKey.IsEmpty() || InRequest.ToKey.IsEmpty())
+		{
+			Output.Messages.Add(FDreamLocReportLine{ DLocDirectory, FDreamLocDiagnostic(EDreamLocSeverity::Error, DreamLocCode::MigrateNotFound, 0, 0,
+				TEXT("-Migrate needs -From=<old key> and -To=<new key>")) });
+		}
+		else
+		{
+			Output = DreamLocSync::Migrate(DreamLocSync::ReadFiles(DLocDirectory, Settings.TargetCultures), InRequest, DLocDirectory);
+			if (!Output.bBlocked)
+			{
+				DreamLocSync::ApplyChanges(DLocDirectory, Output, Output.Messages);
+			}
+		}
+		ReportLines(Output.Messages);
+		ReportChanges(Output, DLocDirectory, /*bInDryRun*/ false);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc migrate: %d translation(s) moved, %d file(s) written, %d error(s), %d warning(s)"),
+			Output.Migrated, Output.NumWrites(), Output.NumErrors(), Output.NumWarnings());
+		return Output.NumErrors() > 0 ? 1 : 0;
+	}
+
+	int32 RunImport(const DreamLocEngine::FImportOptions& InOptions)
+	{
+		const FDreamLocSyncOutput Output = DreamLocEngine::ImportTarget(InOptions);
+		ReportLines(Output.Messages);
+		ReportChanges(Output, FDreamLocTextSource::GetProjectDirectory(), InOptions.bDryRun);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc import: %d translation(s) into existing entries (%d stale), %d file(s) %s, %d error(s), %d warning(s)"),
+			Output.Added, Output.Outdated, Output.NumWrites(), InOptions.bDryRun ? TEXT("to write") : TEXT("written"), Output.NumErrors(), Output.NumWarnings());
+		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
+	}
 }
 
 UDreamLocCommandlet::UDreamLocCommandlet()
@@ -357,6 +477,35 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 	if (HasSwitch(TEXT("Show")))
 	{
 		return RunShow(GetValue(TEXT("Culture")), RootArgument);
+	}
+	if (HasSwitch(TEXT("Sync")) || HasSwitch(TEXT("Gather")))
+	{
+		if (HasSwitch(TEXT("Gather")) && RunGather() != 0)
+		{
+			return 1;
+		}
+		return HasSwitch(TEXT("Sync")) ? RunSync(GetValue(TEXT("Culture")), HasSwitch(TEXT("DryRun"))) : 0;
+	}
+	if (HasSwitch(TEXT("Migrate")))
+	{
+		DreamLocSync::FMigrateRequest Request;
+		Request.FromNamespace = GetValue(TEXT("Namespace"));
+		Request.FromKey = GetValue(TEXT("From"));
+		Request.ToNamespace = GetValue(TEXT("ToNamespace"));
+		Request.ToKey = GetValue(TEXT("To"));
+		Request.bForce = HasSwitch(TEXT("Force"));
+		return RunMigrate(Request);
+	}
+	if (HasSwitch(TEXT("ImportEngine")))
+	{
+		DreamLocEngine::FImportOptions Options;
+		const FString Target = GetValue(TEXT("Target"));
+		Options.Target = Target.IsEmpty() ? TEXT("Game") : Target;
+		Options.NativeCulture = GetValue(TEXT("NativeCulture"));
+		Options.Cultures = SplitCultures(GetValue(TEXT("Culture")));
+		Options.bForce = HasSwitch(TEXT("Force"));
+		Options.bDryRun = HasSwitch(TEXT("DryRun"));
+		return RunImport(Options);
 	}
 
 	const TArray<FString> Roots = GetRoots(RootArgument);
