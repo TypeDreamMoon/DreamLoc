@@ -3,7 +3,8 @@
 using UnrealBuildTool;
 using System.Collections.Generic;
 
-// The game target. Nothing builds it -- the tests use the editor binary -- but a code project needs one.
+// The game target: what Tools/TestHost/Test-Package.ps1 packages, Development and Shipping, to check the baked
+// translations and a mounted mod in a packaged game. The tests use the editor binary.
 public class DreamLocTestHostTarget : TargetRules
 {
 	public DreamLocTestHostTarget(TargetInfo Target) : base(Target)

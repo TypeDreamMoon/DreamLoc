@@ -1,0 +1,9 @@
+dloc 1
+culture en
+namespace DreamLocTestHost.Game
+
+Continue {
+    at    Source/DreamLocTestHost/Private/DreamLocTestHostTexts.cpp
+    src   "继续游戏"
+    text  "Continue"
+}
