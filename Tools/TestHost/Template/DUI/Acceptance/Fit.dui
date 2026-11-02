@@ -1,0 +1,24 @@
+// The fit check's screen: two texts in boxes of their own size, one line each, for translations that do not fit and
+// characters the font does not have.
+class /Game/Acceptance/WBP_Fit
+
+Widget Root {
+    Text Apply {
+        AnchorData.SizeDelta = (160, 32)
+        Font = /DreamGUI/DefaultFont_DistanceField
+        FontSize = 20
+        OverflowType = HorizontalOverflow
+        Text = "应用更改" @note("底部按钮，点了立刻生效") @max(16)
+    }
+    Text Hint {
+        AnchorData.SizeDelta = (320, 32)
+        Font = /DreamGUI/DefaultFont_DistanceField
+        FontSize = 20
+        OverflowType = HorizontalOverflow
+        Text = "按任意键继续"
+    }
+    Text Version {
+        AnchorData.SizeDelta = (120, 32)
+        Text = "v1.0.3" @noloc
+    }
+}
