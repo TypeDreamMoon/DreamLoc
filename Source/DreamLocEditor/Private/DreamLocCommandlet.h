@@ -29,6 +29,12 @@
  *   -ImportEngine
  *               take the translations of the localization target -Target=<name> (default Game) into the .dloc
  *               files; -NativeCulture= when the target does not say, -Force replaces reviewed ones, -DryRun
+ *   -Bake       write Content/Localization/DreamLoc for a packaged game (-DryRun lists the files)
+ *   -Prune      delete the removed blocks and the files left empty (-DryRun)
+ *   -Freeze     record every key as shipped in DLoc/dloc.frozen
+ *   -Export     -Culture=<c> [-Only=untranslated,stale,...] [-Format=json|xliff|po|csv] [-Out=<file>] [-Files=<path prefixes>]
+ *               [-Reference=<cultures>]: the entries for a translator or an AI
+ *   -Import     -In=<file> [-Culture=<c>] [-State=machine|draft|done] [-Force] [-DryRun]: translations back into the .dloc files
  *   -Plugin=<name>
  *               -Gather and -Sync work on that plugin's Source, Content and DLoc/ instead of the project's
  *

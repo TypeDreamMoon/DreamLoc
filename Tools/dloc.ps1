@@ -27,6 +27,15 @@
 #                                     move a translation sync would not move alone (it said so with DLOC3002)
 #   dloc.ps1 import-engine [-Target Game] [-NativeCulture C] [-Culture C] [-Force] [-DryRun]
 #                                     take the translations of an engine localization target into the .dloc files
+#   dloc.ps1 bake [-DryRun]           the project's and plugins' translations into Content/Localization/DreamLoc for a
+#                                     packaged game; warns when the packaging settings would leave them out
+#   dloc.ps1 prune [-DryRun]          delete the removed blocks, and the files left empty
+#   dloc.ps1 freeze                   record the keys as shipped (DLoc/dloc.frozen): a sync that loses one fails
+#   dloc.ps1 export -Culture C [-Only untranslated,stale] [-Format json|xliff|po|csv] [-Out F] [-Files P] [-Reference C]
+#                                     the entries to translate, for an AI (json carries its own instructions), a
+#                                     translator's tool or a spreadsheet; -Files limits it to some .dloc paths
+#   dloc.ps1 import -In F [-Culture C] [-State machine] [-Force] [-DryRun]
+#                                     translations back in: a reviewed one (state done) is kept unless -Force
 #   -Plugin P                         gather and sync a plugin's own Source/Content into its own DLoc/ folder
 #
 # Every command but make and test runs `UnrealEditor-Cmd <project> -run=DreamLoc` on -Project, else the project above -File,
@@ -53,7 +62,7 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Position = 0)][ValidateSet('make', 'test', 'check', 'fmt', 'show', 'gather', 'sync', 'migrate', 'import-engine')][string]$Command = 'test',
+    [Parameter(Position = 0)][ValidateSet('make', 'test', 'check', 'fmt', 'show', 'gather', 'sync', 'migrate', 'import-engine', 'bake', 'prune', 'freeze', 'export', 'import')][string]$Command = 'test',
     [string]$Filter,
     [switch]$NoBuild,
     [string]$Project,
@@ -76,6 +85,13 @@ param(
     [string]$Target,
     [string]$NativeCulture,
     [string]$Plugin,
+    [string]$Only,
+    [string]$Format,
+    [string]$Out,
+    [string]$Files,
+    [string]$Reference,
+    [string]$In,
+    [string]$State,
     [switch]$Raw,
     [ValidateSet('Idle', 'BelowNormal', 'Normal')][string]$Priority = 'BelowNormal'
 )
@@ -297,6 +313,11 @@ function Invoke-Commandlet {
         'sync' { $arguments += '-Sync'; if ($Gather) { $arguments += '-Gather' } }
         'migrate' { $arguments += '-Migrate' }
         'import-engine' { $arguments += '-ImportEngine' }
+        'bake' { $arguments += '-Bake' }
+        'prune' { $arguments += '-Prune' }
+        'freeze' { $arguments += '-Freeze' }
+        'export' { $arguments += '-Export' }
+        'import' { $arguments += '-Import' }
     }
     if ($DryRun) { $arguments += '-DryRun' }
     if ($WithSync) { $arguments += '-WithSync' }
@@ -308,6 +329,9 @@ function Invoke-Commandlet {
     if ($Target) { $arguments += Format-Switch 'Target' $Target }
     if ($NativeCulture) { $arguments += Format-Switch 'NativeCulture' $NativeCulture }
     if ($Plugin) { $arguments += Format-Switch 'Plugin' $Plugin }
+    foreach ($pair in @(@('Only', $Only), @('Format', $Format), @('Out', $Out), @('Files', $Files), @('Reference', $Reference), @('In', $In), @('State', $State))) {
+        if ($pair[1]) { $arguments += Format-Switch $pair[0] $pair[1] }
+    }
     if ($sourceFile) { $arguments += Format-Switch 'File' $sourceFile }
     if ($Root) { $arguments += Format-Switch 'Root' (($Root | ForEach-Object { $_.TrimEnd('\') }) -join ',') }
     if ($Culture) { $arguments += Format-Switch 'Culture' $Culture }

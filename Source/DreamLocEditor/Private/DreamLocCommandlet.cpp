@@ -5,7 +5,9 @@
 #include "DreamLocCheck.h"
 #include "DreamLocDiagnostics.h"
 #include "DreamLocEngine.h"
+#include "DreamLocExchange.h"
 #include "DreamLocFile.h"
+#include "DreamLocPublish.h"
 #include "DreamLocSettings.h"
 #include "DreamLocSync.h"
 #include "DreamLocTextSource.h"
@@ -440,6 +442,117 @@ namespace DreamLocCommandletLocal
 		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
 	}
 
+	int32 RunBake(bool bInDryRun)
+	{
+		DreamLocPublish::FBakeOptions Options;
+		Options.bDryRun = bInDryRun;
+		const DreamLocPublish::FBakeResult Result = DreamLocPublish::Bake(Options);
+		ReportLines(Result.Messages);
+		int32 Translations = 0;
+		for (const TPair<FString, int32>& Pair : Result.Translations)
+		{
+			Translations += Pair.Value;
+		}
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc bake: %d culture(s), %d translation(s), %d source text(s), %d file(s) %s, %d error(s), %d warning(s)"),
+			Result.Translations.Num(), Translations, Result.Sources, Result.Files.Num(), bInDryRun ? TEXT("to write") : TEXT("written"),
+			CountErrors(Result.Messages), CountWarnings(Result.Messages));
+		return Result.bSucceeded && CountErrors(Result.Messages) == 0 ? 0 : 1;
+	}
+
+	int32 RunPrune(bool bInDryRun)
+	{
+		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
+		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		FDreamLocSyncOutput Output = DreamLocPublish::Prune(DreamLocSync::ReadFiles(DLocDirectory, Settings.TargetCultures), DLocDirectory);
+		if (!Output.bBlocked && !bInDryRun)
+		{
+			DreamLocSync::ApplyChanges(DLocDirectory, Output, Output.Messages);
+		}
+		ReportLines(Output.Messages);
+		ReportChanges(Output, DLocDirectory, bInDryRun);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc prune: %d removed entr(ies), %d file(s) %s, %d deleted, %d error(s), %d warning(s)"),
+			Output.Removed, Output.NumWrites(), bInDryRun ? TEXT("to write") : TEXT("written"), Output.NumDeletes(), Output.NumErrors(), Output.NumWarnings());
+		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
+	}
+
+	int32 RunExport(const FString& InCulture, const FString& InOnly, const FString& InFormat, const FString& InOut, const FString& InFiles, const FString& InReferences)
+	{
+		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
+		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		TArray<FDreamLocReportLine> Messages;
+		const TOptional<EDreamLocExchangeFormat> Format = DreamLocExchange::FormatOfPath(TEXT("x.") + (InFormat.IsEmpty() ? FString(TEXT("json")) : InFormat));
+		if (InCulture.IsEmpty() || !Format.IsSet())
+		{
+			UE_LOG(LogDreamLocCommandlet, Display, TEXT("error: -Export needs -Culture=<culture> and a -Format of json, xliff, po or csv"));
+			UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc export: nothing done, 1 error(s), 0 warning(s)"));
+			return 1;
+		}
+		DreamLocExchange::FExportOptions Options;
+		Options.Culture = InCulture;
+		Options.Only = SplitCultures(InOnly);
+		Options.Files = SplitCultures(InFiles);
+		Options.References = SplitCultures(InReferences);
+		TArray<FString> Cultures = Options.References;
+		Cultures.AddUnique(InCulture);
+		const FDreamLocExchangeBatch Batch = DreamLocExchange::Collect(DreamLocSync::ReadFiles(DLocDirectory, Cultures), Options, Settings.SourceCulture, Messages);
+		const FString ProjectDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+		const FString Default = FString::Printf(TEXT("Saved/DLoc/%s-batch.%s"), *InCulture, DreamLocExchange::ExtensionOf(Format.GetValue()));
+		FString Out = InOut.IsEmpty() ? Default : InOut;
+		Out = FPaths::ConvertRelativePathToFull(FPaths::IsRelative(Out) ? ProjectDirectory / Out : Out);
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Out), /*Tree*/ true);
+		const bool bWritten = FFileHelper::SaveStringToFile(DreamLocExchange::Write(Batch, Format.GetValue()), *Out, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		Messages.Add(FDreamLocReportLine{ Out, FDreamLocDiagnostic(bWritten ? EDreamLocSeverity::Info : EDreamLocSeverity::Error, bWritten ? DreamLocCode::Exported : DreamLocCode::SyncBlocked,
+			0, 0, bWritten ? FString::Printf(TEXT("%d entr(ies) of %s"), Batch.Entries.Num(), *InCulture) : FString(TEXT("the file cannot be written"))) });
+		ReportLines(Messages);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc export: %d entr(ies) to %s, %d error(s), %d warning(s)"), Batch.Entries.Num(), *Out, CountErrors(Messages), CountWarnings(Messages));
+		return CountErrors(Messages) > 0 ? 1 : 0;
+	}
+
+	int32 RunImportFile(const FString& InPath, const FString& InCulture, const FString& InState, bool bInForce, bool bInDryRun)
+	{
+		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
+		const FString Path = FPaths::ConvertRelativePathToFull(FPaths::IsRelative(InPath) ? FPaths::ProjectDir() / InPath : InPath);
+		const TOptional<EDreamLocExchangeFormat> Format = DreamLocExchange::FormatOfPath(Path);
+		FDreamLocExchangeBatch Batch;
+		FString Text;
+		FString Error;
+		FDreamLocSyncOutput Output;
+		if (!Format.IsSet() || !FFileHelper::LoadFileToString(Text, *Path) || !DreamLocExchange::Read(Text, Format.GetValue(), Batch, Error))
+		{
+			Output.Messages.Add(FDreamLocReportLine{ Path, FDreamLocDiagnostic(EDreamLocSeverity::Error, DreamLocCode::ImportUnreadable, 0, 0,
+				!Format.IsSet() ? FString(TEXT("not a .json, .xlf, .po or .csv file")) : Error.IsEmpty() ? FString(TEXT("the file cannot be read")) : Error) });
+		}
+		else
+		{
+			DreamLocExchange::FImportOptions Options;
+			Options.Culture = InCulture;
+			Options.State = InState;
+			Options.bForce = bInForce;
+			const FString Culture = InCulture.IsEmpty() ? Batch.Culture : InCulture;
+			Output = DreamLocExchange::Import(Batch, DreamLocSync::ReadFiles(DLocDirectory, { Culture }), Options, DLocDirectory);
+			if (!Output.bBlocked && !bInDryRun)
+			{
+				DreamLocSync::ApplyChanges(DLocDirectory, Output, Output.Messages);
+			}
+		}
+		ReportLines(Output.Messages);
+		ReportChanges(Output, DLocDirectory, bInDryRun);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc import: %d translation(s) into existing entries (%d stale), %d file(s) %s, %d error(s), %d warning(s)"),
+			Output.Added, Output.Outdated, Output.NumWrites(), bInDryRun ? TEXT("to write") : TEXT("written"), Output.NumErrors(), Output.NumWarnings());
+		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
+	}
+
+	int32 RunFreeze()
+	{
+		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
+		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		int32 Keys = 0;
+		const bool bWritten = DreamLocPublish::Freeze(DLocDirectory, DreamLocSync::ReadFiles(DLocDirectory, Settings.TargetCultures), Keys);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc freeze: %d key(s) recorded in %s, %d error(s), 0 warning(s)"), Keys,
+			*(DLocDirectory / DreamLocPublish::FrozenFileName), bWritten ? 0 : 1);
+		return bWritten ? 0 : 1;
+	}
+
 	int32 RunCheck(const FString& InFileArgument, const FString& InRootArgument, bool bInWithSync)
 	{
 		FDreamLocCheckOptions Options;
@@ -543,6 +656,26 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 			return 1;
 		}
 		return HasSwitch(TEXT("Sync")) ? RunSync(Owner, GetValue(TEXT("Culture")), HasSwitch(TEXT("DryRun"))) : 0;
+	}
+	if (HasSwitch(TEXT("Bake")))
+	{
+		return RunBake(HasSwitch(TEXT("DryRun")));
+	}
+	if (HasSwitch(TEXT("Prune")))
+	{
+		return RunPrune(HasSwitch(TEXT("DryRun")));
+	}
+	if (HasSwitch(TEXT("Freeze")))
+	{
+		return RunFreeze();
+	}
+	if (HasSwitch(TEXT("Export")))
+	{
+		return RunExport(GetValue(TEXT("Culture")), GetValue(TEXT("Only")), GetValue(TEXT("Format")), GetValue(TEXT("Out")), GetValue(TEXT("Files")), GetValue(TEXT("Reference")));
+	}
+	if (HasSwitch(TEXT("Import")))
+	{
+		return RunImportFile(GetValue(TEXT("In")), GetValue(TEXT("Culture")), GetValue(TEXT("State")), HasSwitch(TEXT("Force")), HasSwitch(TEXT("DryRun")));
 	}
 	if (HasSwitch(TEXT("Migrate")))
 	{
