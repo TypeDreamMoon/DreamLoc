@@ -5,6 +5,8 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/TextBlock.h"
+#include "Editor.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "Core/DreamTextUserWidget.h"
 #include "Core/DreamWidgetGeneratedClass.h"
 #include "DreamWidgetBlueprint.h"
@@ -40,8 +42,9 @@ namespace DreamLocTestHostLocal
 	 * DUI/Acceptance/LocDemo.dui, and /Game/Acceptance/WBP_UmgDemo, a UMG widget with one text block whose text is
 	 * DreamLocTestHost.UMG / Start, which DLoc/en/Code/DreamLocTestHost.dloc translates. Open both, run
 	 * `DreamLoc.Preview en`, and both read English; edit a .dloc and save, and they follow.
+	 * `DreamLocHost.MakeDemoAssets open` opens both editors too.
 	 */
-	void MakeDemoAssets()
+	void MakeDemoAssets(const TArray<FString>& InArgs)
 	{
 		if (FindPackage(nullptr, TEXT("/Game/Acceptance/WBP_LocDemo")) == nullptr && !FPackageName::DoesPackageExist(TEXT("/Game/Acceptance/WBP_LocDemo")))
 		{
@@ -87,6 +90,18 @@ namespace DreamLocTestHostLocal
 		{
 			UE_LOG(LogDreamLocTestHost, Display, TEXT("/Game/Acceptance/WBP_UmgDemo is already there."));
 		}
+
+		if (InArgs.ContainsByPredicate([](const FString& InArg) { return InArg.Equals(TEXT("open"), ESearchCase::IgnoreCase); }) && GEditor != nullptr)
+		{
+			UAssetEditorSubsystem* AssetEditors = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
+			for (const TCHAR* Path : { TEXT("/Game/Acceptance/WBP_LocDemo.WBP_LocDemo"), TEXT("/Game/Acceptance/WBP_UmgDemo.WBP_UmgDemo") })
+			{
+				if (UObject* Asset = LoadObject<UObject>(nullptr, Path); Asset != nullptr && AssetEditors != nullptr)
+				{
+					AssetEditors->OpenEditorForAsset(Asset);
+				}
+			}
+		}
 	}
 }
 
@@ -97,8 +112,8 @@ public:
 	{
 		Command = IConsoleManager::Get().RegisterConsoleCommand(
 			TEXT("DreamLocHost.MakeDemoAssets"),
-			TEXT("Make /Game/Acceptance/WBP_LocDemo (DreamGUI, from DUI/Acceptance/LocDemo.dui) and /Game/Acceptance/WBP_UmgDemo (UMG), to look at the translations by eye."),
-			FConsoleCommandDelegate::CreateStatic(&DreamLocTestHostLocal::MakeDemoAssets),
+			TEXT("Make /Game/Acceptance/WBP_LocDemo (DreamGUI, from DUI/Acceptance/LocDemo.dui) and /Game/Acceptance/WBP_UmgDemo (UMG), to look at the translations by eye. 'open' opens their editors."),
+			FConsoleCommandWithArgsDelegate::CreateStatic(&DreamLocTestHostLocal::MakeDemoAssets),
 			ECVF_Default);
 	}
 
