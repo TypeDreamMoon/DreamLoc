@@ -15,8 +15,10 @@ enum class EDreamLocSeverity : uint8
 
 /**
  * The DLOCnnnn codes. 1xxx is the text of a file: a .dloc that does not read, or a dloc.ini line that means nothing.
- * 3xxx is what bringing the .dloc files up to date with the sources finds: sync, migrate and the import of the
- * engine's own localization targets. A code, once given, keeps its meaning: editors and scripts match on it.
+ * 2xxx is what a translation says against its source: arguments, plural forms, rich-text tags, blanks, length, terms.
+ * 3xxx is how the files stand against the sources and each other: what sync, migrate and the import of the engine's
+ * own localization targets find, and what `dloc check` sees across files. A code, once given, keeps its meaning:
+ * editors and scripts match on it.
  */
 namespace DreamLocCode
 {
@@ -53,6 +55,25 @@ namespace DreamLocCode
 	/** A dloc.ini key or section DreamLoc does not read. */
 	inline constexpr int32 SettingsUnknownKey = 1016;
 
+	/** The translation's format arguments are not the source's: one is missing, or one the source does not have is used. */
+	inline constexpr int32 ArgumentMismatch = 2001;
+	/** A plural form the culture needs is missing, or one it does not have is given (the engine's own pattern check). */
+	inline constexpr int32 PluralForms = 2002;
+	/** The translation's rich-text tags do not open and close in pairs, or are not the source's tags. */
+	inline constexpr int32 RichTextTags = 2003;
+	/** The source starts or ends with blanks and the translation does not, or the other way round. */
+	inline constexpr int32 EdgeBlanks = 2004;
+	/** The translation has another number of line breaks than the source. */
+	inline constexpr int32 LineBreaks = 2005;
+	/** The translation is wider than its `max` (a full-width character counts 2). */
+	inline constexpr int32 TooLong = 2006;
+	/** The source uses a term and the translation does not use its translation (the culture's terms file). */
+	inline constexpr int32 TermNotUsed = 2007;
+	/** The source has a word the terms file keeps as it is, and the translation does not have it. */
+	inline constexpr int32 KeptWordChanged = 2008;
+	/** The translation is not a pattern the engine can format: an argument or a modifier is not closed. */
+	inline constexpr int32 InvalidPattern = 2009;
+
 	/** A key that disappeared matched a new key of the same namespace by its source text, one to one: its translations moved. */
 	inline constexpr int32 RenameInferred = 3001;
 	/** A key that disappeared may have become one of several new keys, or a new key with a similar text: nothing moved. */
@@ -81,6 +102,18 @@ namespace DreamLocCode
 	inline constexpr int32 MigrateNotFound = 3013;
 	/** The engine's gather did not finish. */
 	inline constexpr int32 GatherFailed = 3014;
+	/** A translation made for a source text that has changed since (it has a `prev`): the source shows until it is reviewed. */
+	inline constexpr int32 StaleTranslation = 3015;
+	/** How many texts of a culture have no translation yet. */
+	inline constexpr int32 Untranslated = 3016;
+	/** A file's removed block: entries that are never loaded, kept until someone deletes them. */
+	inline constexpr int32 RemovedEntries = 3017;
+	/** One namespace and key in two files of one culture and folder: only one of them is used. */
+	inline constexpr int32 DuplicateAcrossFiles = 3018;
+	/** A higher layer (a mod, the project) translates a key a lower layer translates too, differently: the higher one shows. */
+	inline constexpr int32 LayerOverride = 3019;
+	/** The .dloc files are not up to date with the extraction manifests: dloc sync would change them. */
+	inline constexpr int32 NotSynced = 3020;
 }
 
 /** One finding about one file. Line and column are 1-based; a line of 0 is about the whole file. */
