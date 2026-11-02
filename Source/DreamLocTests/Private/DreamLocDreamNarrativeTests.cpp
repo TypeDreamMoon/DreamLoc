@@ -1,12 +1,18 @@
 // Copyright DreamMoon. All Rights Reserved.
 
+#include "DreamLocCheck.h"
 #include "DreamLocExchange.h"
 #include "DreamLocExtract.h"
 #include "DreamLocFile.h"
+#include "DreamLocSettings.h"
 #include "DreamLocSync.h"
 #include "DreamLocTestUtil.h"
+#include "DreamLocTextSource.h"
 #include "Interfaces/IPluginManager.h"
+#include "Internationalization/LocalizedTextSourceTypes.h"
+#include "Internationalization/TextLocalizationResource.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -221,6 +227,79 @@ bool FDreamLocDreamNarrativeCsvTest::RunTest(const FString& Parameters)
 	const FString& File = After[TEXT("en")][DlocPath];
 	TestTrue(TEXT("the translation over two lines"), File.Contains(TEXT("text  \"So you're\\nthe new keeper?\"")));
 	TestTrue(TEXT("the one made from an older source has its prev"), File.Contains(TEXT("prev  \"修灯塔\"")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocDreamNarrativeCheckTest, "DreamLoc.DreamNarrative.ChecksCleanPreviewsAndKeepsADeletedSourcesTranslations",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDreamLocDreamNarrativeCheckTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocDreamNarrativeTestsLocal;
+	FDreamLocExtractManifest Manifest;
+	FString Error;
+	if (!TestTrue(TEXT("the sample reads"), LoadSample(Manifest, Error)))
+	{
+		return false;
+	}
+	// A line with braces of its own, escaped the engine's way, beside a positional argument.
+	FDreamLocExtractEntry& Carved = Manifest.Namespaces[0].Entries.AddDefaulted_GetRef();
+	Carved.Key = TEXT("老周_刻字");
+	Carved.Source = TEXT("门上刻着`{守夜`}，还有 {0} 道划痕。");
+	Carved.At = TEXT("老周_初见#老周_刻字");
+	Carved.Kind = TEXT("line");
+
+	FFiles Files;
+	Sync(Manifest, Files);
+	FString& File = Files[TEXT("en")][DlocPath];
+	File = Translate(File, {
+		{ TEXT("老周_初见.4"), TEXT("You've got {0} parts.") },
+		{ TEXT("quest.修灯.objective1"), TEXT("Parts {0}/3") },
+		{ TEXT("老周_刻字"), TEXT("Carved on the door: `{Watch`}, and {0} scratches.") } });
+
+	const FString Work = DreamLocTestUtil::MakeTempDirectory(TEXT("DreamNarrative"));
+	ON_SCOPE_EXIT { DreamLocTestUtil::DeleteDirectory(Work); };
+	auto Check = [this, &Work](const FString& InFile)
+	{
+		const FString Path = Work / TEXT("DLoc/en") / DlocPath;
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path), /*Tree*/ true);
+		DreamLocTestUtil::WriteText(Path, InFile);
+		FDreamLocCheckOptions Options;
+		Options.Roots.Add(FDreamLocCheckRoot{ Work / TEXT("DLoc"), 1 });
+		TArray<FString> Codes;
+		for (const FDreamLocReportLine& Line : DreamLocCheck::Run(Options).Lines)
+		{
+			if (Line.Diagnostic.Severity != EDreamLocSeverity::Info)
+			{
+				Codes.Add(Line.Diagnostic.GetCodeName());
+				AddInfo(Line.Format());
+			}
+		}
+		return FString::Join(Codes, TEXT(" "));
+	};
+	TestEqual(TEXT("the synced and translated file checks clean: {0} and the escaped braces are understood"), Check(File), FString());
+	TestEqual(TEXT("an argument written escaped is not the argument"), Check(Translate(File, { { TEXT("老周_刻字"), TEXT("Carved: `{0`} scratches.") } })), FString(TEXT("DLOC2001")));
+	Check(File);
+
+	// What the game preview loads for English: the translations, under DreamNarrative's namespace and keys.
+	FDreamLocSettings Settings;
+	Settings.TargetCultures = { TEXT("en") };
+	FDreamLocTextSource Source({ FDreamLocLayer{ 1, TEXT("Project"), Work / TEXT("DLoc") } }, Settings);
+	FTextLocalizationResource English;
+	Source.LoadLocalizedResources(ELocalizationLoadFlags::Game, TArray<FString>{ TEXT("en") }, English, English);
+	const FTextLocalizationResource::FEntry* Line = English.Entries.Find(FTextId(FTextKey(TEXT("DNA/灯塔")), FTextKey(TEXT("老周_初见.4"))));
+	TestTrue(TEXT("the preview has the line's translation"), Line != nullptr && Line->LocalizedString.IsValid() && *Line->LocalizedString == TEXT("You've got {0} parts.")
+		&& Line->SourceStringHash == FTextLocalizationResource::HashString(TEXT("你手上有 {0} 个零件。")));
+
+	// The .dna deleted, and its manifest with it: every translation goes to the removed block, none is lost.
+	FDreamLocSyncInput Input;
+	Input.Cultures = { TEXT("en") };
+	Input.Files = Files;
+	const FDreamLocSyncOutput Gone = DreamLocSync::Run(Input);
+	TestEqual(TEXT("all 22 texts are removed"), Gone.Removed, 22);
+	const TOptional<FString>* After = Gone.Changes.Contains(TEXT("en")) ? Gone.Changes[TEXT("en")].Find(DlocPath) : nullptr;
+	TestTrue(TEXT("the file stays, with the translations in its removed block"), After != nullptr && After->IsSet()
+		&& After->GetValue().Contains(TEXT("removed {")) && After->GetValue().Contains(TEXT("You've got {0} parts.")));
 	return true;
 }
 
