@@ -1,0 +1,10 @@
+// expect: DLOC1010@4:1 DLOC1005@8:1 DLOC1005@10:1
+dloc 1
+culture en
+Early {
+    src   "早"
+}
+namespace Check.Tokens
+}
+
+culture ja

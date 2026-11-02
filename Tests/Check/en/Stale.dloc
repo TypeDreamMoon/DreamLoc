@@ -1,0 +1,18 @@
+// expect: DLOC3015@6:1 DLOC3017@12:1
+dloc 1
+culture en
+namespace Check.Stale
+
+Hint {
+    prev  "按 {Key} 返回"
+    src   "按 {Key} 返回上一页"
+    text  "Press {Key} to go back"
+}
+
+removed {
+    namespace Check.Stale
+    Old {
+        src   "旧"
+        text  "Old"
+    }
+}

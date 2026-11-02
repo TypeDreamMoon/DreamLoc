@@ -1,0 +1,16 @@
+// expect: DLOC2006@9:5
+dloc 1
+culture en
+namespace Check.Max
+
+Apply {
+    max   8
+    src   "应用"
+    text  "Apply all changes"
+}
+
+Count {
+    max   12
+    src   "应用 {Count} 项"
+    text  "Apply {Count} {Count}|plural(one=item,other=items)"
+}

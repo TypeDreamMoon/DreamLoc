@@ -1,0 +1,25 @@
+// Every 1xxx the parser reports, in one file.
+// expect: DLOC1001@8:11 DLOC1002@9:13 DLOC1006@13:5 DLOC1007@15:5 DLOC1008@19:11 DLOC1008@20:11 DLOC1009@23:1
+dloc 1
+culture en
+namespace Check.Syntax
+
+Broken {
+    src   "未完
+    text  "a\qb"
+}
+
+Fields {
+    colour "red"
+    src   "一"
+    src   "二"
+}
+
+Values {
+    max   lots
+    state finished
+    src   "三"
+}
+Fields {
+    src   "四"
+}

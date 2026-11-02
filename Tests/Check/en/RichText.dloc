@@ -1,0 +1,19 @@
+// expect: DLOC2003@8:5 DLOC2003@13:5
+dloc 1
+culture en
+namespace Check.RichText
+
+Unclosed {
+    src   "<b>注意</b>：电量低"
+    text  "<b>Warning: low battery"
+}
+
+Other {
+    src   "按 <key>E</key> 拾取"
+    text  "Press <b>E</b> to pick up"
+}
+
+Fine {
+    src   "<color=#ff0000>危险</>"
+    text  "<color=#ff0000>Danger</>"
+}

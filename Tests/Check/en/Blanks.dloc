@@ -1,0 +1,19 @@
+// expect: DLOC2004@8:5 DLOC2005@13:5
+dloc 1
+culture en
+namespace Check.Blanks
+
+Leading {
+    src   " 秒"
+    text  "seconds"
+}
+
+Lines {
+    src   "第一行\n第二行"
+    text  "One line"
+}
+
+Fine {
+    src   "第一行\n第二行 "
+    text  "First line\nsecond line "
+}

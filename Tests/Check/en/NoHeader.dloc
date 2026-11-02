@@ -1,0 +1,7 @@
+// expect: DLOC1003@2:1
+culture en
+namespace Check.NoHeader
+
+Key {
+    src   "键"
+}

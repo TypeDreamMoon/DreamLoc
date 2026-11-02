@@ -1,0 +1,12 @@
+dloc 1
+culture en
+namespace Check.Duplicate
+
+Same {
+    src   "同"
+    text  "Same"
+}
+
+Untranslated {
+    src   "未翻"
+}

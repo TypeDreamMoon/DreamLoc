@@ -1,0 +1,9 @@
+// expect: DLOC3018@6:1
+dloc 1
+culture en
+namespace Check.Duplicate
+
+Same {
+    src   "同"
+    text  "Same again"
+}

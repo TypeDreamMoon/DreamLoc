@@ -1,0 +1,19 @@
+// expect: DLOC2007@8:5 DLOC2008@13:5
+dloc 1
+culture en
+namespace Check.Terms
+
+Implant {
+    src   "安装义体"
+    text  "Install implants"
+}
+
+Studio {
+    src   "DreamMoon 出品"
+    text  "Made by Dream Moon"
+}
+
+Fine {
+    src   "义体商店"
+    text  "Cyberware shop"
+}

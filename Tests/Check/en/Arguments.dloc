@@ -1,0 +1,24 @@
+// expect: DLOC2001@8:5 DLOC2001@13:5 DLOC2009@18:5
+dloc 1
+culture en
+namespace Check.Arguments
+
+Missing {
+    src   "{Name} 获得了 {Count} 个物品"
+    text  "{Name} got items"
+}
+
+Extra {
+    src   "欢迎"
+    text  "Welcome, {Name}"
+}
+
+Broken {
+    src   "{Count} 个物品"
+    text  "{Count} {Count}|plural(one=item,other=items)|plural(one=a,other=b)"
+}
+
+Fine {
+    src   "应用 {Count} 项更改"
+    text  "Apply {Count} {Count}|plural(one=change,other=changes)"
+}

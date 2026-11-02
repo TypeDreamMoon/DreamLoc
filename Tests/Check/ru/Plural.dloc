@@ -1,0 +1,14 @@
+// expect: DLOC2002@8:5 DLOC2002@8:5
+dloc 1
+culture ru
+namespace Check.Plural
+
+Items {
+    src   "{Count} 个物品"
+    text  "{Count} {Count}|plural(one=предмет,other=предметов)"
+}
+
+Fine {
+    src   "{Count} 个物品"
+    text  "{Count} {Count}|plural(one=предмет,few=предмета,many=предметов,other=предмета)"
+}

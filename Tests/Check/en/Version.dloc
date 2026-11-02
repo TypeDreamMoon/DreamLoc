@@ -1,0 +1,4 @@
+// expect: DLOC1004@2:6
+dloc 2
+culture en
+namespace Check.Version
