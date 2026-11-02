@@ -131,6 +131,12 @@ from the sources, and not renamed, writes nothing and says so (DLOC3022). `dloc 
 whose translations nobody needs any more. A plugin keeps its own texts with `dloc gather -Plugin <name>` and
 `dloc sync -Plugin <name>`, into its own `DLoc/` folder (with its own `dloc.ini`, or the project's cultures).
 
+With DreamNarrative in the test host too (a worktree in `Plugins/DreamNarrative`, the plugin enabled in the
+`.uproject`, the `.dna` under `DNarrative/`), `DreamLocHost.Acceptance.DreamNarrative.*` takes a chapter through DLoc:
+first `dnc.ps1 build` and `dnc.ps1 loc-export` with `-Project <host> -Root <host>/DNarrative` (an absolute root), then
+the test syncs the chapter's manifest, imports the old CSV with its translations, checks, and reads the compiled
+chapter's texts under the English preview. Without DreamNarrative the test has nothing to check and says so.
+
 `Tools/TestHost/Test-Package.ps1` packages the test host, Development and Shipping, finds the baked files in the pak
 and runs each package with `-DreamLocProbe`: it reads its texts in Chinese and English, mounts a mod that brings
 Polish, reads them in Polish, and writes what it saw for the script to compare.
