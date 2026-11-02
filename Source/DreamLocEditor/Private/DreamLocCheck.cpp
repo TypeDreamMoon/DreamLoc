@@ -4,6 +4,7 @@
 
 #include "DreamLocSettings.h"
 #include "DreamLocTextSource.h"
+#include "Features/IModularFeatures.h"
 #include "HAL/FileManager.h"
 #include "Internationalization/Culture.h"
 #include "Internationalization/Internationalization.h"
@@ -679,6 +680,77 @@ void DreamLocCheck::CheckEntry(const FDreamLocEntry& InEntry, const FString& InC
 	}
 }
 
+FString DreamLocCheck::DescribeGlyphs(TConstArrayView<uint32> InCodepoints)
+{
+	TArray<FString> Parts;
+	for (const uint32 Codepoint : InCodepoints)
+	{
+		FString Char;
+		if (Codepoint > 0xFFFF)
+		{
+			uint16 High = 0;
+			uint16 Low = 0;
+			StringConv::DecodeSurrogate(Codepoint, High, Low);
+			Char.AppendChar(static_cast<TCHAR>(High));
+			Char.AppendChar(static_cast<TCHAR>(Low));
+		}
+		else
+		{
+			Char.AppendChar(static_cast<TCHAR>(Codepoint));
+		}
+		Parts.Add(FString::Printf(TEXT("'%s' (U+%04X)"), *Char, Codepoint));
+	}
+	return FString::Join(Parts, TEXT(", "));
+}
+
+void DreamLocCheck::CheckFit(TConstArrayView<IDreamLocContextProvider*> InProviders, const FString& InOwnerDirectory, const FString& InNamespace,
+	const FDreamLocEntry& InEntry, const FString& InCulture, TArray<FDreamLocDiagnostic>& OutDiagnostics)
+{
+	const FString* Text = InEntry.Find(EDreamLocField::Text);
+	const FString* At = InEntry.Find(EDreamLocField::At);
+	if (Text == nullptr || At == nullptr || Text->IsEmpty())
+	{
+		return;
+	}
+	FString Source;
+	if (!At->Split(TEXT("#"), &Source, nullptr))
+	{
+		Source = *At;
+	}
+	for (IDreamLocContextProvider* Provider : InProviders)
+	{
+		if (Provider == nullptr || !Provider->HandlesSource(Source))
+		{
+			continue;
+		}
+		FDreamLocFitRequest Request;
+		Request.Namespace = InNamespace;
+		Request.Key = InEntry.Key;
+		Request.At = *At;
+		Request.OwnerDirectory = InOwnerDirectory;
+		Request.Culture = InCulture;
+		Request.Text = *Text;
+		FDreamLocFitResult Fit;
+		if (!Provider->MeasureTranslation(Request, Fit) || !Fit.bMeasured)
+		{
+			continue;
+		}
+		const FDreamLocFieldValue& Field = InEntry.Fields[(int32)EDreamLocField::Text];
+		if (Fit.bOverflows)
+		{
+			OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::TranslationOverflows, Field.Line, Field.Column, FString::Printf(
+				TEXT("in %s the translation does not fit where it is shown: it needs %.0f x %.0f, %s has %.0f x %.0f"),
+				*InCulture, Fit.Needed.X, Fit.Needed.Y, Fit.Where.IsEmpty() ? TEXT("the text") : *Fit.Where, Fit.Box.X, Fit.Box.Y));
+		}
+		if (Fit.MissingGlyphs.Num() > 0)
+		{
+			OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::GlyphsMissing, Field.Line, Field.Column, FString::Printf(
+				TEXT("the font of %s has no glyph for %s"), Fit.Where.IsEmpty() ? TEXT("the text") : *Fit.Where, *DescribeGlyphs(Fit.MissingGlyphs)));
+		}
+		return;
+	}
+}
+
 FDreamLocCheckResult DreamLocCheck::Run(const FDreamLocCheckOptions& InOptions)
 {
 	using namespace DreamLocCheckLocal;
@@ -777,8 +849,10 @@ FDreamLocCheckResult DreamLocCheck::Run(const FDreamLocCheckOptions& InOptions)
 		}
 	}
 
-	// Each translated entry against its source; removed blocks.
+	// Each translated entry against its source; laid out where it is shown, by the tools that show it; removed blocks.
 	const FDreamLocTerms NoTerms;
+	const TArray<IDreamLocContextProvider*> Providers = IModularFeatures::Get().GetModularFeatureImplementations<IDreamLocContextProvider>(
+		IDreamLocContextProvider::GetModularFeatureName());
 	for (FFile& File : Files)
 	{
 		if (!File.bReport || !File.bRead || File.Document.bTerms)
@@ -786,9 +860,14 @@ FDreamLocCheckResult DreamLocCheck::Run(const FDreamLocCheckOptions& InOptions)
 			continue;
 		}
 		const FDreamLocTerms* CultureTerms = Terms.Find(TermsKey(File));
-		File.Document.ForEachEntry([&](const FString&, const FDreamLocEntry& InEntry, bool)
+		const FString Owner = FPaths::GetPath(Roots[File.Root == INDEX_NONE ? 0 : File.Root].Directory);
+		File.Document.ForEachEntry([&](const FString& InNamespace, const FDreamLocEntry& InEntry, bool)
 		{
 			CheckEntry(InEntry, File.Culture, CultureTerms != nullptr ? *CultureTerms : NoTerms, File.Diagnostics);
+			if (Providers.Num() > 0 && File.Root != INDEX_NONE)
+			{
+				CheckFit(Providers, Owner, InNamespace, InEntry, File.Culture, File.Diagnostics);
+			}
 		});
 		for (const FDreamLocItem& Item : File.Document.Items)
 		{

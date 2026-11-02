@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DreamLocContextProvider.h"
 #include "DreamLocDiagnostics.h"
 #include "DreamLocFile.h"
 #include "DreamLocSync.h"
@@ -61,6 +62,17 @@ namespace DreamLocCheck
 	/** The 2xxx checks and the stale check of one entry; nothing for an entry without a translation. */
 	DREAMLOCEDITOR_API void CheckEntry(const FDreamLocEntry& InEntry, const FString& InCulture, const FDreamLocTerms& InTerms,
 		TArray<FDreamLocDiagnostic>& OutDiagnostics);
+
+	/**
+	 * The 4xxx checks of one translated entry: the first provider that handles its source lays it out where it is shown
+	 * (DLOC4001 when it does not fit, DLOC4002 for characters its font does not have). Nothing when none does, or it
+	 * cannot find where the text is.
+	 */
+	DREAMLOCEDITOR_API void CheckFit(TConstArrayView<IDreamLocContextProvider*> InProviders, const FString& InOwnerDirectory, const FString& InNamespace,
+		const FDreamLocEntry& InEntry, const FString& InCulture, TArray<FDreamLocDiagnostic>& OutDiagnostics);
+
+	/** `'Ö' (U+00D6), '𓀀' (U+13000)`. */
+	DREAMLOCEDITOR_API FString DescribeGlyphs(TConstArrayView<uint32> InCodepoints);
 
 	/** The width of a text on screen in columns: a full-width character (CJK, kana, hangul, full-width forms) counts 2. */
 	DREAMLOCEDITOR_API int32 DisplayWidth(const FString& InText);

@@ -134,6 +134,12 @@ namespace DreamLocCode
 	inline constexpr int32 Imported = 3029;
 	/** A translated key the source tool numbers by position (`stable: false`) has a new source: maybe every key after an inserted text shifted. */
 	inline constexpr int32 PositionalKeyChanged = 3030;
+
+	// --- 4xxx: laid out where the game shows it, by the tool that shows it (IDreamLocContextProvider: DreamGUI)
+	/** The translation does not fit its text's box: cut, or past it. */
+	inline constexpr int32 TranslationOverflows = 4001;
+	/** The text's font has no glyph for some characters of the translation. */
+	inline constexpr int32 GlyphsMissing = 4002;
 }
 
 /** One finding about one file. Line and column are 1-based; a line of 0 is about the whole file. */
