@@ -17,9 +17,9 @@
 #                                     never rewritten
 #   dloc.ps1 show -Culture C [-Root R]
 #                                     the translations the engine would get for that culture, and from which file
-#   dloc.ps1 gather                   run the engine's text gather (C++ LOCTEXT, asset FTexts; dloc.ini [Gather])
+#   dloc.ps1 gather [-Plugin P]       run the engine's text gather (C++ LOCTEXT, asset FTexts; dloc.ini [Gather])
 #                                     into Engine extraction manifests
-#   dloc.ps1 sync [-Gather] [-Culture C] [-DryRun]
+#   dloc.ps1 sync [-Gather] [-Plugin P] [-Culture C] [-DryRun]
 #                                     bring every target culture's .dloc files up to date with the extraction
 #                                     manifests: new keys, changed sources, renames, removed texts; -Gather first
 #                                     gathers; -Culture limits it to some cultures (comma-separated)
@@ -27,6 +27,7 @@
 #                                     move a translation sync would not move alone (it said so with DLOC3002)
 #   dloc.ps1 import-engine [-Target Game] [-NativeCulture C] [-Culture C] [-Force] [-DryRun]
 #                                     take the translations of an engine localization target into the .dloc files
+#   -Plugin P                         gather and sync a plugin's own Source/Content into its own DLoc/ folder
 #
 # Every command but make and test runs `UnrealEditor-Cmd <project> -run=DreamLoc` on -Project, else the project above -File,
 # else the project above the current directory, else the test host, and keep the lines that matter: diagnostics
@@ -74,6 +75,7 @@ param(
     [string]$ToNamespace,
     [string]$Target,
     [string]$NativeCulture,
+    [string]$Plugin,
     [switch]$Raw,
     [ValidateSet('Idle', 'BelowNormal', 'Normal')][string]$Priority = 'BelowNormal'
 )
@@ -305,6 +307,7 @@ function Invoke-Commandlet {
     if ($ToNamespace) { $arguments += Format-Switch 'ToNamespace' $ToNamespace }
     if ($Target) { $arguments += Format-Switch 'Target' $Target }
     if ($NativeCulture) { $arguments += Format-Switch 'NativeCulture' $NativeCulture }
+    if ($Plugin) { $arguments += Format-Switch 'Plugin' $Plugin }
     if ($sourceFile) { $arguments += Format-Switch 'File' $sourceFile }
     if ($Root) { $arguments += Format-Switch 'Root' (($Root | ForEach-Object { $_.TrimEnd('\') }) -join ',') }
     if ($Culture) { $arguments += Format-Switch 'Culture' $Culture }

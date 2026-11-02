@@ -29,6 +29,8 @@
  *   -ImportEngine
  *               take the translations of the localization target -Target=<name> (default Game) into the .dloc
  *               files; -NativeCulture= when the target does not say, -Force replaces reviewed ones, -DryRun
+ *   -Plugin=<name>
+ *               -Gather and -Sync work on that plugin's Source, Content and DLoc/ instead of the project's
  *
  * Options
  *   -File=<path>      one file (absolute, or relative to the project directory) instead of every file
