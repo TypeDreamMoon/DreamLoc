@@ -15,7 +15,8 @@ enum class EDreamLocSeverity : uint8
 
 /**
  * The DLOCnnnn codes. 1xxx is the text of a file: a .dloc that does not read, or a dloc.ini line that means nothing.
- * A code, once given, keeps its meaning: editors and scripts match on it.
+ * 3xxx is what bringing the .dloc files up to date with the sources finds: sync, migrate and the import of the
+ * engine's own localization targets. A code, once given, keeps its meaning: editors and scripts match on it.
  */
 namespace DreamLocCode
 {
@@ -51,6 +52,27 @@ namespace DreamLocCode
 	inline constexpr int32 SettingsSyntax = 1015;
 	/** A dloc.ini key or section DreamLoc does not read. */
 	inline constexpr int32 SettingsUnknownKey = 1016;
+
+	/** A key that disappeared matched a new key of the same namespace by its source text, one to one: its translations moved. */
+	inline constexpr int32 RenameInferred = 3001;
+	/** A key that disappeared may have become one of several new keys, or a new key with a similar text: nothing moved. */
+	inline constexpr int32 RenameCandidates = 3002;
+	/** A namespace that disappeared: most of its texts turned up under a new one, so all its translations moved there. */
+	inline constexpr int32 NamespaceMoved = 3003;
+	/** Texts the source no longer has, moved into their file's removed block. */
+	inline constexpr int32 MovedToRemoved = 3004;
+	/** One namespace and key with two different source texts, from two sources. The first is kept. */
+	inline constexpr int32 SourceConflict = 3005;
+	/** A source changed after its extraction manifest was written: the manifest may not say what the source says now. */
+	inline constexpr int32 ManifestOutOfDate = 3006;
+	/** An extraction manifest that does not read. Nothing is written: its texts would read as removed. */
+	inline constexpr int32 ManifestUnreadable = 3007;
+	/** Translations of a source that exists but has no extraction manifest (it was never compiled): left as they are. */
+	inline constexpr int32 SourceNotExtracted = 3008;
+	/** A .dloc that does not read, or no target culture: nothing is written. */
+	inline constexpr int32 SyncBlocked = 3009;
+	/** `dloc migrate` was given a key that is not there, or more than one. */
+	inline constexpr int32 MigrateNotFound = 3013;
 }
 
 /** One finding about one file. Line and column are 1-based; a line of 0 is about the whole file. */
