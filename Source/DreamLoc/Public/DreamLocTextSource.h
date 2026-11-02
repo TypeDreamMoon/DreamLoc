@@ -11,15 +11,20 @@
 
 struct FDreamLocDocument;
 
-/** One DLoc/ folder and where it ranks. */
+/** One DLoc/ folder, or one baked folder, and where it ranks. */
 struct DREAMLOC_API FDreamLocLayer
 {
 	/** 0: an enabled plugin's own text. 1: the project. 2 and up: DLC and mods, in the order they were mounted. */
 	int32 Index = 1;
-	/** "Project", "Plugin.DreamGUI", or what the code that mounted it called it. */
+	/** "Project", "Plugin.DreamGUI", "Mod.<name>", or what the code that mounted it called it. */
 	FString Name;
 	/** The absolute path of the DLoc folder: the one holding the <culture>/ folders. */
 	FString Directory;
+	/**
+	 * Not .dloc files but what `dloc bake` made of them: <Directory>/<culture>/DreamLoc.locres per culture, the source
+	 * culture's mapping every text to its source, and <Directory>/DreamLoc.locmeta naming it.
+	 */
+	bool bBaked = false;
 };
 
 /**
@@ -47,6 +52,10 @@ struct DREAMLOC_API FDreamLocLayer
  * Only game text: the Game load flags (or the editor's forced-localized game preview). The editor's own text and the
  * engine's are never touched. In the editor without a game preview, nothing is loaded: the editor shows the source.
  *
+ * A packaged game has no DLoc/ folder: the project's translations come from what `dloc bake` wrote into
+ * Content/Localization/DreamLoc (the plugins' baked in with them), at the project's layer, with the source culture's
+ * baked file as the source-to-source entries. Mods' DLoc/ folders are read as .dloc files over it, packaged or not.
+ *
  * LoadLocalizedResources runs on the engine's localization task; everything here is safe to call from any thread.
  */
 class DREAMLOC_API FDreamLocTextSource : public ILocalizedTextSource
@@ -73,12 +82,28 @@ public:
 	/** The project's DLoc/ folder, absolute (it may not exist). */
 	static FString GetProjectDirectory();
 
+	/** Where `dloc bake` writes and a packaged game reads: <Project>/Content/Localization/DreamLoc, absolute. */
+	static FString GetBakedDirectory();
+
+	/** The base name of the baked files: DreamLoc.locres, DreamLoc.locmeta. */
+	static constexpr const TCHAR* BakedName = TEXT("DreamLoc");
+
+	/**
+	 * The baked folder is one of the engine's own game localization paths ([Internationalization] LocalizationPaths):
+	 * the Native way of shipping, where the engine loads the baked files and DreamLoc leaves them alone.
+	 */
+	static bool IsBakedDirectoryLoadedByEngine();
+
 	/**
 	 * A culture name the engine knows ("en", "zh-Hans", "es-419"), case-insensitively. Not FInternationalization::GetCulture
 	 * alone: that makes a culture of any string at all, so a folder named "Drafts" would pass.
 	 */
 	static bool IsKnownCulture(const FString& InName);
-	/** Layer 0, one per enabled plugin with a DLoc/ folder, and layer 1, the project's, when they exist. */
+	/**
+	 * Layer 0, one per enabled plugin with a DLoc/ folder; layer 1, the project's DLoc/ folder, or, where there is none
+	 * (a packaged game), the baked folder unless the engine loads it itself; and from 2, one per enabled mod plugin
+	 * (a plugin of the project's Mods/ folder) with a DLoc/ folder, by name.
+	 */
 	static TArray<FDreamLocLayer> FindLayers();
 
 	/** Every layer the next load reads: found and mounted, in rank order. */
@@ -125,6 +150,8 @@ private:
 	TArray<FDreamLocLayer> GetLayers_Locked() const;
 	/** The project has a DLoc/ folder, or layers are mounted or fixed: DreamLoc speaks for the game's text. */
 	bool IsInUse_Locked() const;
+	/** The source culture a baked folder's DreamLoc.locmeta names, and the file mapping each text to its source. */
+	static bool ReadBakedNative(const FString& InDirectory, FString& OutCulture, FString& OutNativeLocRes);
 	/** The parsed file, or null when it cannot be read or has errors (logged once per version of the file). */
 	TSharedPtr<FDreamLocDocument> GetDocument_Locked(const FString& InPath, const FString& InCulture);
 

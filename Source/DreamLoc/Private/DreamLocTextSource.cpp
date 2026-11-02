@@ -65,6 +65,41 @@ FString FDreamLocTextSource::GetProjectDirectory()
 	return FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / DreamLocTextSourceLocal::DirectoryName);
 }
 
+FString FDreamLocTextSource::GetBakedDirectory()
+{
+	FString Directory = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir() / TEXT("Localization") / BakedName);
+	FPaths::NormalizeDirectoryName(Directory);
+	return Directory;
+}
+
+bool FDreamLocTextSource::IsBakedDirectoryLoadedByEngine()
+{
+	const FString Baked = GetBakedDirectory();
+	for (const FString& Path : FPaths::GetGameLocalizationPaths())
+	{
+		FString Full = FPaths::ConvertRelativePathToFull(Path);
+		FPaths::NormalizeDirectoryName(Full);
+		if (Full.Equals(Baked, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FDreamLocTextSource::ReadBakedNative(const FString& InDirectory, FString& OutCulture, FString& OutNativeLocRes)
+{
+	FTextLocalizationMetaDataResource MetaData;
+	const FString Path = InDirectory / (FString(BakedName) + TEXT(".locmeta"));
+	if (!IFileManager::Get().FileExists(*Path) || !MetaData.LoadFromFile(Path))
+	{
+		return false;
+	}
+	OutCulture = MetaData.NativeCulture;
+	OutNativeLocRes = MetaData.NativeLocRes.IsEmpty() ? FString() : InDirectory / MetaData.NativeLocRes;
+	return !OutCulture.IsEmpty();
+}
+
 bool FDreamLocTextSource::IsKnownCulture(const FString& InName)
 {
 	// The engine's list does not change while it runs; made once, on first use.
@@ -85,21 +120,32 @@ bool FDreamLocTextSource::IsKnownCulture(const FString& InName)
 TArray<FDreamLocLayer> FDreamLocTextSource::FindLayers()
 {
 	TArray<FDreamLocLayer> Layers;
+	TArray<FDreamLocLayer> Mods;
 	for (const TSharedRef<IPlugin>& Plugin : IPluginManager::Get().GetEnabledPlugins())
 	{
-		const FString Directory = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir() / DreamLocTextSourceLocal::DirectoryName);
+		FString Directory = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir() / DreamLocTextSourceLocal::DirectoryName);
+		FPaths::NormalizeDirectoryName(Directory);
 		if (IFileManager::Get().DirectoryExists(*Directory))
 		{
-			FDreamLocLayer& Layer = Layers.AddDefaulted_GetRef();
-			Layer.Index = 0;
-			Layer.Name = TEXT("Plugin.") + Plugin->GetName();
+			const bool bMod = Plugin->GetType() == EPluginType::Mod;
+			FDreamLocLayer& Layer = (bMod ? Mods : Layers).AddDefaulted_GetRef();
+			Layer.Index = bMod ? 2 : 0;
+			Layer.Name = (bMod ? TEXT("Mod.") : TEXT("Plugin.")) + Plugin->GetName();
 			Layer.Directory = Directory;
 		}
 	}
-	// By name, so two runs over the same plugins load them in the same order.
+	// By name, so two runs over the same plugins load them in the same order; each mod over the ones before it.
 	Layers.Sort([](const FDreamLocLayer& A, const FDreamLocLayer& B) { return A.Name < B.Name; });
+	Mods.Sort([](const FDreamLocLayer& A, const FDreamLocLayer& B) { return A.Name < B.Name; });
+	for (int32 Index = 0; Index < Mods.Num(); ++Index)
+	{
+		Mods[Index].Index = 2 + Index;
+	}
 
 	const FString ProjectDirectory = GetProjectDirectory();
+	const FString BakedDirectory = GetBakedDirectory();
+	FString NativeCulture;
+	FString NativeLocRes;
 	if (IFileManager::Get().DirectoryExists(*ProjectDirectory))
 	{
 		FDreamLocLayer& Layer = Layers.AddDefaulted_GetRef();
@@ -107,6 +153,15 @@ TArray<FDreamLocLayer> FDreamLocTextSource::FindLayers()
 		Layer.Name = TEXT("Project");
 		Layer.Directory = ProjectDirectory;
 	}
+	else if (ReadBakedNative(BakedDirectory, NativeCulture, NativeLocRes) && !IsBakedDirectoryLoadedByEngine())
+	{
+		FDreamLocLayer& Layer = Layers.AddDefaulted_GetRef();
+		Layer.Index = 1;
+		Layer.Name = TEXT("Project");
+		Layer.Directory = BakedDirectory;
+		Layer.bBaked = true;
+	}
+	Layers.Append(MoveTemp(Mods));
 	return Layers;
 }
 
@@ -177,20 +232,32 @@ FDreamLocSettings FDreamLocTextSource::ReadSettings_Locked() const
 
 bool FDreamLocTextSource::IsInUse_Locked() const
 {
-	return bFixed || MountedLayers.Num() > 0 || IFileManager::Get().DirectoryExists(*GetProjectDirectory());
+	return bFixed || MountedLayers.Num() > 0 || GetLayers_Locked().Num() > 0;
 }
 
 bool FDreamLocTextSource::GetNativeCultureName(const ELocalizedTextSourceCategory InCategory, FString& OutNativeCultureName)
 {
 	FScopeLock ScopeLock(&Lock);
 	// Only for a project that uses DreamLoc: one that has a localization target of its own and no DLoc/ keeps the
-	// native culture its target says.
-	if (InCategory != ELocalizedTextSourceCategory::Game || !IsInUse_Locked())
+	// native culture its target says, and so does one shipped the Native way, where the engine reads the baked files.
+	if (InCategory != ELocalizedTextSourceCategory::Game)
 	{
 		return false;
 	}
-	OutNativeCultureName = ReadSettings_Locked().SourceCulture;
-	return !OutNativeCultureName.IsEmpty();
+	if (bFixed || IFileManager::Get().DirectoryExists(*GetProjectDirectory()))
+	{
+		OutNativeCultureName = ReadSettings_Locked().SourceCulture;
+		return !OutNativeCultureName.IsEmpty();
+	}
+	for (const FDreamLocLayer& Layer : GetLayers_Locked())
+	{
+		FString NativeLocRes;
+		if (Layer.bBaked && ReadBakedNative(Layer.Directory, OutNativeCultureName, NativeLocRes))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 void FDreamLocTextSource::GetLocalizedCultureNames(const ELocalizationLoadFlags InLoadFlags, TSet<FString>& OutLocalizedCultureNames)
@@ -204,21 +271,26 @@ void FDreamLocTextSource::GetLocalizedCultureNames(const ELocalizationLoadFlags 
 	{
 		return;
 	}
-	const FDreamLocSettings Settings = ReadSettings_Locked();
-	OutLocalizedCultureNames.Add(Settings.SourceCulture);
-	for (const FString& Culture : Settings.TargetCultures)
+	if (bFixed || IFileManager::Get().DirectoryExists(*GetProjectDirectory()))
 	{
-		OutLocalizedCultureNames.Add(Culture);
+		const FDreamLocSettings Settings = ReadSettings_Locked();
+		OutLocalizedCultureNames.Add(Settings.SourceCulture);
+		for (const FString& Culture : Settings.TargetCultures)
+		{
+			OutLocalizedCultureNames.Add(Culture);
+		}
 	}
-	// And every culture a layer has a folder for: a mod can bring a language the project does not list.
+	// And every culture a layer has a folder for: a mod can bring a language the project does not list. A baked
+	// folder's cultures are the ones it has a file for.
 	for (const FDreamLocLayer& Layer : GetLayers_Locked())
 	{
-		IFileManager::Get().IterateDirectory(*Layer.Directory, [&OutLocalizedCultureNames](const TCHAR* InPath, bool bInIsDirectory)
+		IFileManager::Get().IterateDirectory(*Layer.Directory, [&OutLocalizedCultureNames, &Layer](const TCHAR* InPath, bool bInIsDirectory)
 		{
 			if (bInIsDirectory)
 			{
 				const FString Name = FPaths::GetCleanFilename(InPath);
-				if (IsKnownCulture(Name))
+				const bool bHasFile = !Layer.bBaked || IFileManager::Get().FileExists(*(FString(InPath) / (FString(BakedName) + TEXT(".locres"))));
+				if (bHasFile && IsKnownCulture(Name))
 				{
 					OutLocalizedCultureNames.Add(Name);
 				}
@@ -259,6 +331,16 @@ void FDreamLocTextSource::LoadLocalizedResources(const ELocalizationLoadFlags In
 		const FString& Culture = Cultures[CultureIndex];
 		for (const FDreamLocLayer& Layer : Layers)
 		{
+			if (Layer.bBaked)
+			{
+				// What `dloc bake` made: one file per culture, each entry already under the hash it should match.
+				const FString Path = Layer.Directory / Culture / (FString(BakedName) + TEXT(".locres"));
+				if (IFileManager::Get().FileExists(*Path))
+				{
+					InOutLocalizedResource.LoadFromFile(Path, MakeEntryPriority(CultureIndex, Layer.Index));
+				}
+				continue;
+			}
 			const FString CultureDirectory = Layer.Directory / Culture;
 			if (!IFileManager::Get().DirectoryExists(*CultureDirectory))
 			{
@@ -321,6 +403,16 @@ void FDreamLocTextSource::LoadLocalizedResources(const ELocalizationLoadFlags In
 	{
 		InOutLocalizedResource.AddEntry(Seen.Key.GetNamespace(), Seen.Key.GetKey(), Seen.Value.Source, Seen.Value.Source,
 			MakeSourceEntryPriority(Seen.Value.Layer));
+	}
+	// A baked folder's source-to-source entries are its source culture's file.
+	for (const FDreamLocLayer& Layer : Layers)
+	{
+		FString NativeCulture;
+		FString NativeLocRes;
+		if (Layer.bBaked && ReadBakedNative(Layer.Directory, NativeCulture, NativeLocRes) && IFileManager::Get().FileExists(*NativeLocRes))
+		{
+			InOutLocalizedResource.LoadFromFile(NativeLocRes, MakeSourceEntryPriority(Layer.Index));
+		}
 	}
 }
 

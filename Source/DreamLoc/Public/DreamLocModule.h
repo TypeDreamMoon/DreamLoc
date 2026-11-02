@@ -6,6 +6,7 @@
 #include "Modules/ModuleInterface.h"
 
 class FDreamLocTextSource;
+class IPlugin;
 
 /**
  * Registers DreamLoc's text source with the engine at start-up, before the engine first loads game text, so the
@@ -37,5 +38,17 @@ public:
 	virtual void ShutdownModule() override;
 
 private:
+	/**
+	 * A plugin mounted while the game runs -- a DLC, a mod -- with a DLoc/ folder becomes a layer over everything
+	 * before it, and the translations are loaded again. Its cultures join the game's list.
+	 */
+	void HandlePluginMounted(IPlugin& InPlugin);
+	void HandlePluginUnmounted(IPlugin& InPlugin);
+
 	TSharedPtr<FDreamLocTextSource> TextSource;
+	/** The next layer a mounted plugin gets: above the mods found at start-up. */
+	int32 NextMountedLayer = 2;
+	FDelegateHandle MountedHandle;
+	FDelegateHandle CreatedHandle;
+	FDelegateHandle UnmountedHandle;
 };
