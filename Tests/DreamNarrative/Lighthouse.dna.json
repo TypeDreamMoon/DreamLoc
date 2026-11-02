@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "provider": "DreamNarrative",
+  "source": "DNarrative/DLocSample/灯塔.dna",
+  "namespace": "DNA/灯塔",
+  "entries": [
+    { "key": "character.老周", "src": "老周头", "at": "character.老周", "kind": "character" },
+    { "key": "character.小雾", "src": "小雾", "at": "character.小雾", "kind": "character" },
+    { "key": "character.守夜人", "src": "守夜人", "at": "character.守夜人", "kind": "character" },
+    { "key": "chapter.序章", "src": "序章", "at": "chapter.序章", "kind": "chapter" },
+    { "key": "quest.修灯.title", "src": "修好灯塔", "at": "quest.修灯#title", "kind": "quest", "context": { "quest": "修灯" } },
+    { "key": "quest.修灯.journal.accepted", "src": "灯室缺三个零件。", "at": "quest.修灯#journal.accepted", "kind": "quest", "context": { "quest": "修灯" } },
+    { "key": "quest.修灯.journal.going", "src": "还差 {0} 个。", "at": "quest.修灯#journal.going", "kind": "quest", "context": { "quest": "修灯", "args": ["3 - 找到的零件"] } },
+    { "key": "quest.修灯.objective1", "src": "零件 {0}/3", "at": "quest.修灯#objective1", "kind": "quest", "stable": false, "context": { "quest": "修灯", "args": ["找到的零件"] } },
+    { "key": "quest.修灯.点灯", "src": "点亮灯塔", "at": "quest.修灯#点灯", "kind": "quest", "context": { "quest": "修灯" } },
+    { "key": "archive.守夜日志.title", "src": "守夜日志", "at": "archive.守夜日志#title", "kind": "archive", "context": { "archive": "守夜日志" } },
+    { "key": "archive.守夜日志.entry0", "src": "第一夜:灯坏了。", "at": "archive.守夜日志#entry0", "kind": "archive", "stable": false, "context": { "archive": "守夜日志" } },
+    { "key": "archive.守夜日志.灯亮那夜", "src": "灯亮了。", "at": "archive.守夜日志#灯亮那夜", "kind": "archive", "context": { "archive": "守夜日志" } },
+    { "key": "stage.灯亮.灯亮", "src": "灯亮了", "at": "stage.灯亮#灯亮", "kind": "stage", "context": { "stage": "灯亮" } },
+    { "key": "stage.灯亮.text1", "src": "海上有船", "at": "stage.灯亮#text1", "kind": "stage", "stable": false, "context": { "stage": "灯亮" } },
+    { "key": "老周_初见.1", "src": "你就是新来的守夜人?", "at": "老周_初见#老周_初见.1", "kind": "line", "note": "第一次见面,语气冷淡\n别翻成客套话", "stable": false, "context": { "speaker": "老周", "speakerDisplay": "老周头", "dialogue": "老周_初见", "tags": "皱眉", "for": "2.5" } },
+    { "key": "老周_灯坏", "src": "灯坏了三天了。", "at": "老周_初见#老周_灯坏", "kind": "line", "context": { "speaker": "老周", "speakerDisplay": "老周头", "dialogue": "老周_初见", "previous": "你就是新来的守夜人?" } },
+    { "key": "老周_初见.c1", "src": "我去修。", "at": "老周_初见#老周_初见.c1", "kind": "choice", "stable": false, "context": { "dialogue": "老周_初见", "previous": "灯坏了三天了。" } },
+    { "key": "老周_初见.3", "src": "灯室里缺三个零件。", "at": "老周_初见#老周_初见.3", "kind": "line", "stable": false, "context": { "speaker": "老周", "speakerDisplay": "老周头", "dialogue": "老周_初见", "previous": "灯坏了三天了。" } },
+    { "key": "老周_初见.c2", "src": "先歇一会儿。", "at": "老周_初见#老周_初见.c2", "kind": "choice", "note": "玩家想歇一会儿,语气随意", "stable": false, "context": { "dialogue": "老周_初见", "previous": "灯坏了三天了。" } },
+    { "key": "老周_初见.4", "src": "你手上有 {0} 个零件。", "at": "老周_初见#老周_初见.4", "kind": "line", "stable": false, "context": { "speaker": "老周", "speakerDisplay": "老周头", "dialogue": "老周_初见", "previous": "灯室里缺三个零件。", "args": ["找到的零件"] } },
+    { "key": "小雾_无线电.1", "src": "我看见灯了!", "at": "小雾_无线电#小雾_无线电.1", "kind": "line", "stable": false, "context": { "speaker": "小雾", "speakerDisplay": "小雾", "dialogue": "小雾_无线电", "channel": "无线电" } }
+  ]
+}

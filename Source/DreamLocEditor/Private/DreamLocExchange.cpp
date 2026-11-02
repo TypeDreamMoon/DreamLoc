@@ -954,14 +954,15 @@ namespace DreamLocExchangeLocal
 			OutError = TEXT("no header row");
 			return false;
 		}
+		// Columns by name, in any case and order; others (DreamNarrative's Character, Dialogue, Line...) are left alone.
 		TMap<FString, int32> Column;
 		for (int32 Index = 0; Index < Rows[0].Num(); ++Index)
 		{
-			Column.Add(Rows[0][Index].TrimStartAndEnd(), Index);
+			Column.FindOrAdd(Rows[0][Index].TrimStartAndEnd().ToLower(), Index);
 		}
 		for (const TCHAR* Required : { TEXT("Namespace"), TEXT("Key"), TEXT("Translation") })
 		{
-			if (!Column.Contains(Required))
+			if (!Column.Contains(FString(Required).ToLower()))
 			{
 				OutError = FString::Printf(TEXT("no %s column"), Required);
 				return false;
@@ -972,7 +973,7 @@ namespace DreamLocExchangeLocal
 			const TArray<FString>& Row = Rows[RowIndex];
 			auto Get = [&Row, &Column](const TCHAR* InName)
 			{
-				const int32* Index = Column.Find(InName);
+				const int32* Index = Column.Find(FString(InName).ToLower());
 				return Index != nullptr && Row.IsValidIndex(*Index) ? Row[*Index] : FString();
 			};
 			FDreamLocExchangeEntry& Entry = OutBatch.Entries.AddDefaulted_GetRef();
