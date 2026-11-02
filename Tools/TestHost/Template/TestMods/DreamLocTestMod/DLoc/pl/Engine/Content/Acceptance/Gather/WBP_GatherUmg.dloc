@@ -1,0 +1,9 @@
+dloc 1
+culture pl
+namespace DreamLocTestHost.Gather
+
+Start {
+    at    Content/Acceptance/Gather/WBP_GatherUmg.uasset#WBP_GatherUmg_C:WidgetTree.Start.Text
+    src   "开始游戏"
+    text  "Rozpocznij grę"
+}

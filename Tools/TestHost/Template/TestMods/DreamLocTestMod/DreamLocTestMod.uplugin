@@ -1,0 +1,12 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "DreamLoc Test Mod",
+	"Description": "A mod with nothing but translations: Polish for the test host. Tools/TestHost/Test-Package.ps1 mounts it in the packaged game.",
+	"Category": "Testing",
+	"CreatedBy": "TypeDreamMoon",
+	"CanContainContent": false,
+	"EnabledByDefault": false,
+	"Modules": []
+}

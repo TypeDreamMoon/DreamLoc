@@ -1,0 +1,32 @@
+// The AI round trip's screen: the kinds of text a translator meets -- arguments, a count, rich-text tags, a term
+// and a name that stays as it is.
+class /Game/Acceptance/WBP_Settings
+
+Widget Root {
+    Text Title {
+        Text = "设置"
+    }
+    Text Volume {
+        Text = "音量：{Value}%"
+    }
+    Text Saved {
+        Text = "已保存 {Count} 个存档"
+    }
+    Text Warning {
+        Text = "<b>注意</b>：更改语言后需要重新启动"
+    }
+    Text Implant {
+        Text = "义体设置"
+    }
+    Text Credits {
+        Text = "由 DreamMoon 制作"
+    }
+    Widget Footer {
+        Text Apply {
+            Text = "应用"
+        }
+        Text Back {
+            Text = "返回"
+        }
+    }
+}

@@ -24,6 +24,8 @@ public class DreamLocTestHostEditor : ModuleRules
 			"DreamLoc",
 			"DreamLocEditor",
 			"DreamLocTestHost",
+			"Json",
+			"Projects",
 		});
 	}
 }

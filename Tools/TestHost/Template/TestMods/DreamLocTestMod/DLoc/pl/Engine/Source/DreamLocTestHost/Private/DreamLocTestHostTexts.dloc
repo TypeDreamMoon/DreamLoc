@@ -1,0 +1,10 @@
+// The test mod's Polish: a culture the project itself does not translate into.
+dloc 1
+culture pl
+namespace DreamLocTestHost.Game
+
+Continue {
+    at    Source/DreamLocTestHost/Private/DreamLocTestHostTexts.cpp
+    src   "继续游戏"
+    text  "Kontynuuj"
+}
