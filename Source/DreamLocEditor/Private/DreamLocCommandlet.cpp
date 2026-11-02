@@ -492,10 +492,20 @@ namespace DreamLocCommandletLocal
 		Options.Only = SplitCultures(InOnly);
 		Options.Files = SplitCultures(InFiles);
 		Options.References = SplitCultures(InReferences);
+		const FString ProjectDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+		// The manifests say what each text is and what the source tool knows about it (a line's speaker...).
+		for (const FString& Path : DreamLocExtract::FindManifestFiles(DreamLocExtract::GetExtractDirectory(ProjectDirectory)))
+		{
+			FDreamLocExtractManifest Manifest;
+			FString Error;
+			if (DreamLocExtract::LoadFile(Path, Manifest, Error))
+			{
+				Options.Manifests.Add(MoveTemp(Manifest));
+			}
+		}
 		TArray<FString> Cultures = Options.References;
 		Cultures.AddUnique(InCulture);
 		const FDreamLocExchangeBatch Batch = DreamLocExchange::Collect(DreamLocSync::ReadFiles(DLocDirectory, Cultures), Options, Settings.SourceCulture, Messages);
-		const FString ProjectDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
 		const FString Default = FString::Printf(TEXT("Saved/DLoc/%s-batch.%s"), *InCulture, DreamLocExchange::ExtensionOf(Format.GetValue()));
 		FString Out = InOut.IsEmpty() ? Default : InOut;
 		Out = FPaths::ConvertRelativePathToFull(FPaths::IsRelative(Out) ? ProjectDirectory / Out : Out);

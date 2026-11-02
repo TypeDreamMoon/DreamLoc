@@ -8,6 +8,7 @@
 #include "Dom/JsonObject.h"
 #include "DreamLocCheck.h"
 #include "DreamLocExchange.h"
+#include "DreamLocExtract.h"
 #include "DreamLocFile.h"
 #include "DreamLocModule.h"
 #include "DreamLocSync.h"
@@ -193,11 +194,16 @@ bool FDreamLocAiRoundTripTest::RunTest(const FString& Parameters)
 	DreamLocExchange::FExportOptions Export;
 	Export.Culture = TEXT("en");
 	Export.Files = { ScreenDloc };
+	FDreamLocExtractManifest Manifest;
+	FString ManifestError;
+	TestTrue(TEXT("the screen's manifest"), DreamLocExtract::LoadFile(DreamLocExtract::GetExtractDirectory(Project) / TEXT("DreamGUI/DUI/Acceptance/Settings.dui.json"), Manifest, ManifestError));
+	Export.Manifests = { Manifest };
 	const FDreamLocExchangeBatch Batch = DreamLocExchange::Collect(DreamLocSync::ReadFiles(DLoc, { TEXT("en") }), Export, TEXT("zh-Hans"), Messages);
 	TestEqual(TEXT("the batch has the whole screen"), Batch.Entries.Num(), 8);
 	const FDreamLocExchangeEntry* Implant = Batch.Entries.FindByPredicate([](const FDreamLocExchangeEntry& InEntry) { return InEntry.Key == TEXT("Implant.Text"); });
 	TestTrue(TEXT("with the term the source uses"), Implant != nullptr && Implant->Terms.Num() == 1 && Implant->Terms[0].Value == TEXT("Cyberware"));
-	TestTrue(TEXT("and the texts around it"), Implant != nullptr && Implant->Context.Num() == 4);
+	TestTrue(TEXT("and the texts around it"), Implant != nullptr && Implant->Nearby.Num() == 4);
+	TestTrue(TEXT("and what DreamGUI says it is"), Implant != nullptr && !Implant->Kind.IsEmpty());
 	const FString BatchPath = Work / TEXT("en-batch.json");
 	FFileHelper::SaveStringToFile(DreamLocExchange::Write(Batch, EDreamLocExchangeFormat::Json), *BatchPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
 

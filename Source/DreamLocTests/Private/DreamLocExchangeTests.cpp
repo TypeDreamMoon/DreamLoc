@@ -127,7 +127,7 @@ bool FDreamLocExportTest::RunTest(const FString& Parameters)
 	const FDreamLocExchangeEntry* Implant = FindEntry(Batch, TEXT("Implant.Text"));
 	TestTrue(TEXT("the terms the source uses"), Implant != nullptr && Implant->Terms.Num() == 1 && Implant->Terms[0].Value == TEXT("Cyberware"));
 	TestTrue(TEXT("and the words kept"), Implant != nullptr && Implant->Keeps.Num() == 1 && Implant->Keeps[0] == TEXT("DreamMoon"));
-	TestTrue(TEXT("the texts around it on the screen"), Implant != nullptr && Implant->Context.Num() == 2 && Implant->Context[1] == TEXT("按 {Key} 返回上一页"));
+	TestTrue(TEXT("the texts around it on the screen"), Implant != nullptr && Implant->Nearby.Num() == 2 && Implant->Nearby[1] == TEXT("按 {Key} 返回上一页"));
 
 	Options.Only = { TEXT("all") };
 	Batch = DreamLocExchange::Collect(MakeFiles(), Options, TEXT("zh-Hans"), Messages);

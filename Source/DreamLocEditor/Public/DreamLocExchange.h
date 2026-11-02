@@ -15,8 +15,9 @@
  *   dloc check
  *
  * Each exported entry carries what a translator needs: the source text, the note and length limit, where it comes
- * from, the source texts around it in its file, the culture's terms the source uses, for a stale entry the source
- * it was translated from and that translation, and (with -Reference) other cultures' translations. JSON is the format
+ * from, the source texts around it in its file, what the source tool says about it (kind and context: the speaker of
+ * a line, what each argument is), the culture's terms the source uses, for a stale entry the source it was translated
+ * from and that translation, and (with -Reference) other cultures' translations. JSON is the format
  * for an AI: one object, its own instructions in it, each entry's `text` to fill in. Import matches entries by
  * namespace and key, never overwrites a reviewed translation (state done) without -Force, and imports a translation
  * made for a source text that has changed since as stale, with a `prev`.
@@ -47,7 +48,10 @@ struct DREAMLOCEDITOR_API FDreamLocExchangeEntry
 	FString Prev;
 	FString PreviousText;
 	/** The source texts before and after it in its file. */
-	TArray<FString> Context;
+	TArray<FString> Nearby;
+	/** What the source tool says the text is, and knows about it (the speaker, what each argument is): from its manifest. */
+	FString Kind;
+	TArray<FDreamLocExtractContext> Context;
 	/** The culture's terms the source uses: word -> translation. */
 	TArray<TPair<FString, FString>> Terms;
 	/** Words the source has that stay as they are. */
@@ -76,6 +80,8 @@ namespace DreamLocExchange
 		TArray<FString> Files;
 		/** Cultures whose translations come along for reference. */
 		TArray<FString> References;
+		/** The extraction manifests, for each entry's kind and context. */
+		TArray<FDreamLocExtractManifest> Manifests;
 	};
 
 	/** The entries to export, from the .dloc files as sync reads them (culture -> path -> text). */

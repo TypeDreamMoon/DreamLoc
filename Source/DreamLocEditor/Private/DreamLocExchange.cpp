@@ -103,8 +103,44 @@ namespace DreamLocExchangeLocal
 		TEXT("the engine's modifiers, as in {Count}|plural(one=item,other=items), with the plural forms that language needs. Keep rich-text tags ")
 		TEXT("(<b>...</b>, <color=...>...</>, <img=.../>) the same and in pairs. Keep blanks at either end and line breaks (\\n) as the source has them. ")
 		TEXT("Stay within max, counted in display width (a full-width character counts 2). Use the given translation for each term in terms, ")
-		TEXT("and keep each word in keep unchanged. note says what the text is for; context is the texts around it on the same screen; ")
-		TEXT("a stale entry's prev is the old source and previousText its old translation; reference holds other languages' translations.");
+		TEXT("and keep each word in keep unchanged. note says what the text is for; kind and context say what it is and what the game knows about it ")
+		TEXT("(who speaks a line, the dialogue, the line before it, and in args what each {0}, {1}... stands for); nearby is the texts around it in the ")
+		TEXT("same file; a stale entry's prev is the old source and previousText its old translation; reference holds other languages' translations.");
+
+	FString JsonContext(const TArray<FDreamLocExtractContext>& InContext)
+	{
+		TArray<FString> Items;
+		for (const FDreamLocExtractContext& Item : InContext)
+		{
+			FString Value;
+			if (Item.bList)
+			{
+				TArray<FString> Quoted;
+				for (const FString& Element : Item.Values)
+				{
+					Quoted.Add(JsonQuote(Element));
+				}
+				Value = TEXT("[") + FString::Join(Quoted, TEXT(", ")) + TEXT("]");
+			}
+			else
+			{
+				Value = JsonQuote(Item.Describe());
+			}
+			Items.Add(FString::Printf(TEXT("%s: %s"), *JsonQuote(Item.Name), *Value));
+		}
+		return TEXT("{ ") + FString::Join(Items, TEXT(", ")) + TEXT(" }");
+	}
+
+	/** The context in one line, for the formats that have no structure for it: `speaker: 老周; args: {0} 找到的零件`. */
+	FString ContextLine(const TArray<FDreamLocExtractContext>& InContext)
+	{
+		TArray<FString> Items;
+		for (const FDreamLocExtractContext& Item : InContext)
+		{
+			Items.Add(Item.Name + TEXT(": ") + Item.Describe());
+		}
+		return FString::Join(Items, TEXT("; "));
+	}
 
 	FString WriteJson(const FDreamLocExchangeBatch& InBatch)
 	{
@@ -145,9 +181,17 @@ namespace DreamLocExchangeLocal
 				Members.Add(FString::Printf(TEXT("\"prev\": %s"), *JsonQuote(Entry.Prev)));
 				Members.Add(FString::Printf(TEXT("\"previousText\": %s"), *JsonQuote(Entry.PreviousText)));
 			}
+			if (!Entry.Kind.IsEmpty())
+			{
+				Members.Add(FString::Printf(TEXT("\"kind\": %s"), *JsonQuote(Entry.Kind)));
+			}
 			if (Entry.Context.Num() > 0)
 			{
-				Members.Add(FString::Printf(TEXT("\"context\": %s"), *JsonStrings(Entry.Context)));
+				Members.Add(FString::Printf(TEXT("\"context\": %s"), *JsonContext(Entry.Context)));
+			}
+			if (Entry.Nearby.Num() > 0)
+			{
+				Members.Add(FString::Printf(TEXT("\"nearby\": %s"), *JsonStrings(Entry.Nearby)));
 			}
 			if (Entry.Terms.Num() > 0)
 			{
@@ -487,7 +531,22 @@ namespace DreamLocExchangeLocal
 				{
 					Out += FString::Printf(TEXT("          <context context-type=\"sourcefile\">%s</context>\n"), *XmlEscape(Entry.At, false));
 				}
-				Out += TEXT("        </context-group>\n      </trans-unit>\n");
+				Out += TEXT("        </context-group>\n");
+				if (!Entry.Kind.IsEmpty() || Entry.Context.Num() > 0)
+				{
+					// The source tool's own words about the text, each as an x- context the translator's tool shows.
+					Out += TEXT("        <context-group purpose=\"information\">\n");
+					if (!Entry.Kind.IsEmpty())
+					{
+						Out += FString::Printf(TEXT("          <context context-type=\"x-kind\">%s</context>\n"), *XmlEscape(Entry.Kind, false));
+					}
+					for (const FDreamLocExtractContext& Item : Entry.Context)
+					{
+						Out += FString::Printf(TEXT("          <context context-type=\"x-%s\">%s</context>\n"), *XmlEscape(Item.Name, true), *XmlEscape(Item.Describe(), false));
+					}
+					Out += TEXT("        </context-group>\n");
+				}
+				Out += TEXT("      </trans-unit>\n");
 			}
 			Out += TEXT("    </body>\n  </file>\n");
 		}
@@ -590,6 +649,14 @@ namespace DreamLocExchangeLocal
 				Out += FString::Printf(TEXT("#. max %d\n"), Entry.Max);
 			}
 			Out += FString::Printf(TEXT("#. dloc: %s\n"), *PoComment(Entry.File));
+			if (!Entry.Kind.IsEmpty())
+			{
+				Out += FString::Printf(TEXT("#. dloc-kind: %s\n"), *PoComment(Entry.Kind));
+			}
+			if (Entry.Context.Num() > 0)
+			{
+				Out += FString::Printf(TEXT("#. dloc-context: %s\n"), *PoComment(ContextLine(Entry.Context)));
+			}
 			if (!Entry.At.IsEmpty())
 			{
 				Out += FString::Printf(TEXT("#: %s\n"), *PoComment(Entry.At));
@@ -725,7 +792,7 @@ namespace DreamLocExchangeLocal
 				{
 					Unit.State = Line.RightChop(9);
 				}
-				else if (Line.StartsWith(TEXT("#. previous translation: ")))
+				else if (Line.StartsWith(TEXT("#. previous translation: ")) || Line.StartsWith(TEXT("#. dloc-")))
 				{
 					// For the translator only.
 				}
@@ -782,7 +849,7 @@ namespace DreamLocExchangeLocal
 	}
 
 	const TArray<FString> CsvColumns = { TEXT("Namespace"), TEXT("Key"), TEXT("Source"), TEXT("Translation"), TEXT("State"), TEXT("Note"),
-		TEXT("Max"), TEXT("File"), TEXT("At"), TEXT("Prev"), TEXT("PreviousTranslation"), TEXT("SourceCulture"), TEXT("Culture") };
+		TEXT("Max"), TEXT("File"), TEXT("At"), TEXT("Prev"), TEXT("PreviousTranslation"), TEXT("Kind"), TEXT("Context"), TEXT("SourceCulture"), TEXT("Culture") };
 
 	FString WriteCsv(const FDreamLocExchangeBatch& InBatch)
 	{
@@ -790,7 +857,8 @@ namespace DreamLocExchangeLocal
 		for (const FDreamLocExchangeEntry& Entry : InBatch.Entries)
 		{
 			TArray<FString> Fields = { Entry.Namespace, Entry.Key, Entry.Source, Entry.Text, Entry.State, Entry.Note,
-				Entry.Max >= 0 ? FString::FromInt(Entry.Max) : FString(), Entry.File, Entry.At, Entry.Prev, Entry.PreviousText, InBatch.SourceCulture, InBatch.Culture };
+				Entry.Max >= 0 ? FString::FromInt(Entry.Max) : FString(), Entry.File, Entry.At, Entry.Prev, Entry.PreviousText, Entry.Kind, ContextLine(Entry.Context),
+				InBatch.SourceCulture, InBatch.Culture };
 			for (FString& Field : Fields)
 			{
 				Field = CsvField(Field);
@@ -971,6 +1039,19 @@ FDreamLocExchangeBatch DreamLocExchange::Collect(const TMap<FString, TMap<FStrin
 		return true;
 	};
 
+	// What the source tools say about each text, by namespace and key.
+	TMap<FString, const FDreamLocExtractEntry*> FromManifests;
+	for (const FDreamLocExtractManifest& Manifest : InOptions.Manifests)
+	{
+		for (const FDreamLocExtractNamespace& Namespace : Manifest.Namespaces)
+		{
+			for (const FDreamLocExtractEntry& Extracted : Namespace.Entries)
+			{
+				FromManifests.FindOrAdd(IdOf(Namespace.Namespace, Extracted.Key), &Extracted);
+			}
+		}
+	}
+
 	// Other cultures' translations, by namespace and key.
 	TMap<FString, TArray<TPair<FString, FString>>> References;
 	for (const FString& Culture : InOptions.References)
@@ -1067,8 +1148,13 @@ FDreamLocExchangeBatch DreamLocExchange::Collect(const TMap<FString, TMap<FStrin
 			{
 				if (Near != Index)
 				{
-					Entry.Context.Add(FieldOr(Entries[Near].Value, EDreamLocField::Src));
+					Entry.Nearby.Add(FieldOr(Entries[Near].Value, EDreamLocField::Src));
 				}
+			}
+			if (const FDreamLocExtractEntry* const* Extracted = FromManifests.Find(IdOf(Entry.Namespace, Entry.Key)))
+			{
+				Entry.Kind = (*Extracted)->Kind;
+				Entry.Context = (*Extracted)->Context;
 			}
 			for (const TPair<FString, FString>& Term : Batch.Terms.Terms)
 			{
