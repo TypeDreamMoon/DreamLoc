@@ -2,6 +2,7 @@
 
 #include "DreamLocCommandlet.h"
 
+#include "DreamLocCheck.h"
 #include "DreamLocDiagnostics.h"
 #include "DreamLocEngine.h"
 #include "DreamLocFile.h"
@@ -137,59 +138,6 @@ namespace DreamLocCommandletLocal
 				}
 			}
 		}
-	}
-
-	/** What only the file's place can tell: its culture against its folder, and entries that will not load. */
-	void CheckPlacement(const FSourceFile& InFile, const FDreamLocDocument& InDocument, TArray<FDreamLocDiagnostic>& OutDiagnostics)
-	{
-		if (!InFile.Culture.IsEmpty())
-		{
-			if (!FDreamLocTextSource::IsKnownCulture(InFile.Culture))
-			{
-				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::UnknownCulture, 0, 0, FString::Printf(
-					TEXT("the folder '%s' is not a culture the engine knows; the file is never loaded"), *InFile.Culture));
-			}
-			if (InDocument.bHasCulture && !InDocument.Culture.Equals(InFile.Culture, ESearchCase::IgnoreCase))
-			{
-				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::CultureMismatch, 0, 0, FString::Printf(
-					TEXT("the file says 'culture %s' but is in the %s folder; it is loaded as %s"), *InDocument.Culture, *InFile.Culture, *InFile.Culture));
-			}
-		}
-		InDocument.ForEachEntry([&OutDiagnostics](const FString&, const FDreamLocEntry& InEntry, bool)
-		{
-			if (InEntry.IsTranslated() && !InEntry.Has(EDreamLocField::Src))
-			{
-				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::MissingSource, InEntry.Line, InEntry.Column, FString::Printf(
-					TEXT("'%s' has a text but no src; it is not loaded until it has one"), *InEntry.Key));
-			}
-		});
-	}
-
-	int32 RunCheck(const TArray<FSourceFile>& InFiles, const TArray<FString>& InRoots)
-	{
-		FRun Run;
-		for (const FString& Root : InRoots)
-		{
-			const FString SettingsPath = Root / FDreamLocSettings::FileName;
-			FString Text;
-			if (IFileManager::Get().FileExists(*SettingsPath) && FFileHelper::LoadFileToString(Text, *SettingsPath))
-			{
-				TArray<FDreamLocDiagnostic> Diagnostics;
-				FDreamLocSettings::Parse(Text, Diagnostics);
-				Report(Run, SettingsPath, Diagnostics);
-			}
-		}
-		for (const FSourceFile& File : InFiles)
-		{
-			++Run.Files;
-			FDreamLocDocument Document;
-			TArray<FDreamLocDiagnostic> Diagnostics;
-			DreamLocFile::LoadFile(File.Path, Document, Diagnostics);
-			CheckPlacement(File, Document, Diagnostics);
-			Report(Run, File.Path, Diagnostics);
-		}
-		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc check: %d file(s), %d error(s), %d warning(s)"), Run.Files, Run.Errors, Run.Warnings);
-		return Run.Errors > 0 ? 1 : 0;
 	}
 
 	int32 RunFormat(const TArray<FSourceFile>& InFiles, bool bInWrite, bool bInVerify)
@@ -439,6 +387,58 @@ namespace DreamLocCommandletLocal
 			Output.Added, Output.Outdated, Output.NumWrites(), InOptions.bDryRun ? TEXT("to write") : TEXT("written"), Output.NumErrors(), Output.NumWarnings());
 		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
 	}
+
+	int32 RunCheck(const FString& InFileArgument, const FString& InRootArgument, bool bInWithSync)
+	{
+		FDreamLocCheckOptions Options;
+		if (InRootArgument.IsEmpty())
+		{
+			for (const FDreamLocLayer& Layer : FDreamLocTextSource::FindLayers())
+			{
+				Options.Roots.Add(FDreamLocCheckRoot{ Layer.Directory, Layer.Index });
+			}
+		}
+		else
+		{
+			for (const FString& Root : GetRoots(InRootArgument))
+			{
+				Options.Roots.Add(FDreamLocCheckRoot{ Root, 1 });
+			}
+		}
+		if (!InFileArgument.IsEmpty())
+		{
+			Options.File = FPaths::ConvertRelativePathToFull(FPaths::IsRelative(InFileArgument) ? FPaths::ProjectDir() / InFileArgument : InFileArgument);
+		}
+		const FDreamLocCheckResult Result = DreamLocCheck::Run(Options);
+		TArray<FDreamLocReportLine> Lines = Result.Lines;
+
+		// What sync would say: rename candidates, conflicting sources, sources not compiled, and files it would change.
+		if (bInWithSync && InFileArgument.IsEmpty() && InRootArgument.IsEmpty())
+		{
+			DreamLocSync::FDirectoryOptions SyncOptions;
+			SyncOptions.OwnerDirectory = FPaths::ProjectDir();
+			SyncOptions.bDryRun = true;
+			const FDreamLocSyncOutput Sync = DreamLocSync::SyncDirectory(SyncOptions);
+			for (const FDreamLocReportLine& Line : Sync.Messages)
+			{
+				if (Line.Diagnostic.Severity != EDreamLocSeverity::Info)
+				{
+					Lines.Add(Line);
+				}
+			}
+			const int32 Changes = Sync.NumWrites() + Sync.NumDeletes();
+			if (!Sync.bBlocked && Changes > 0)
+			{
+				Lines.Add(FDreamLocReportLine{ FDreamLocTextSource::GetProjectDirectory(), FDreamLocDiagnostic(EDreamLocSeverity::Warning,
+					DreamLocCode::NotSynced, 0, 0, FString::Printf(TEXT("%d file(s) are not up to date with the sources; dloc sync -DryRun lists them"), Changes)) });
+			}
+		}
+
+		ReportLines(Lines);
+		const int32 Errors = CountErrors(Lines);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc check: %d file(s), %d error(s), %d warning(s)"), Result.Files, Errors, CountWarnings(Lines));
+		return Errors > 0 ? 1 : 0;
+	}
 }
 
 UDreamLocCommandlet::UDreamLocCommandlet()
@@ -508,12 +508,12 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 		return RunImport(Options);
 	}
 
-	const TArray<FString> Roots = GetRoots(RootArgument);
-	TArray<FSourceFile> Files;
-	CollectFiles(GetValue(TEXT("File")), Roots, Files);
 	if (HasSwitch(TEXT("Format")))
 	{
+		const TArray<FString> Roots = GetRoots(RootArgument);
+		TArray<FSourceFile> Files;
+		CollectFiles(GetValue(TEXT("File")), Roots, Files);
 		return RunFormat(Files, HasSwitch(TEXT("Write")), HasSwitch(TEXT("Verify")));
 	}
-	return RunCheck(Files, Roots);
+	return RunCheck(GetValue(TEXT("File")), RootArgument, HasSwitch(TEXT("WithSync")));
 }

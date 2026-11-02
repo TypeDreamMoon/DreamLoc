@@ -12,7 +12,9 @@
  *   UnrealEditor-Cmd.exe <Project>.uproject -run=DreamLoc [mode] [options]
  *
  * Modes
- *   (none)      check: read every .dloc and report what does not read
+ *   (none)      check: every .dloc, what does not read (1xxx), each translation against its source (2xxx: arguments,
+ *               plural forms, rich-text tags, blanks, line breaks, max, terms) and across files (3xxx: stale, removed,
+ *               a key twice, layers); -WithSync adds what a dry-run sync says (rename candidates, files not up to date)
  *   -Format     print each file's canonical text to stdout between `===== begin <file> =====` and
  *               `===== end <file> =====`; with -Write rewrite the files that differ (UTF-8 without BOM, LF);
  *               with -Verify write nothing and count every file that is not canonical as an error.

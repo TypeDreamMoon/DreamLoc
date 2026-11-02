@@ -8,8 +8,9 @@
 #                                     DreamLoc.* test and the host's DreamLocHost.* end-to-end check; -Filter
 #                                     replaces that, several prefixes joined with `+`)
 #
-#   dloc.ps1 check [-File F] [-Root R]
-#                                     read every .dloc (and dloc.ini) and report what does not read
+#   dloc.ps1 check [-File F] [-Root R] [-WithSync]
+#                                     every .dloc: what does not read (1xxx), each translation against its source
+#                                     (2xxx), and across files (3xxx); -WithSync adds what a dry-run sync says
 #   dloc.ps1 fmt [-File F] [-Root R] [-Write | -Verify] [-Markers]
 #                                     print the canonical text; -Write rewrites the files that differ; -Verify
 #                                     writes nothing and fails on any file not canonical. A file with errors is
@@ -65,6 +66,7 @@ param(
     [switch]$Markers,
     [switch]$Gather,
     [switch]$DryRun,
+    [switch]$WithSync,
     [switch]$Force,
     [string]$From,
     [string]$To,
@@ -295,6 +297,7 @@ function Invoke-Commandlet {
         'import-engine' { $arguments += '-ImportEngine' }
     }
     if ($DryRun) { $arguments += '-DryRun' }
+    if ($WithSync) { $arguments += '-WithSync' }
     if ($Force) { $arguments += '-Force' }
     if ($From) { $arguments += Format-Switch 'From' $From }
     if ($To) { $arguments += Format-Switch 'To' $To }
