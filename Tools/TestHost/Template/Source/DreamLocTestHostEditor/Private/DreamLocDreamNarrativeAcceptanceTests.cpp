@@ -54,7 +54,7 @@ namespace DreamLocDreamNarrativeAcceptanceLocal
 		{ TEXT("小雾_无线电.1"), TEXT("I can see the light!") },
 	};
 
-	/** RFC 4180, as `dnc loc-export` writes it: rows of fields, quotes doubled, a quoted field may hold a line break. */
+	/** RFC 4180, as `dnc loc-export` wrote it: rows of fields, quotes doubled, a quoted field may hold a line break. */
 	TArray<TArray<FString>> ReadRows(const FString& InText)
 	{
 		TArray<TArray<FString>> Rows;
@@ -208,11 +208,14 @@ bool FDreamLocDreamNarrativeChapterTest::RunTest(const FString& Parameters)
 	FString Project = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
 	FPaths::NormalizeDirectoryName(Project);
 	const FString Manifest = Project / TEXT("Intermediate/DLoc/extract/DreamNarrative") / (FString(Source) + TEXT(".json"));
-	const FString Exported = Project / TEXT("Saved/DreamNarrative/Translations.csv");
+	// The old CSV is a fixed sample: what `dnc loc-export` wrote for this chapter before DreamNarrative left its
+	// translations to DreamLoc and dropped the command -- its BOM, its columns, no culture, no translations yet.
+	const TSharedPtr<IPlugin> DreamLoc = IPluginManager::Get().FindPlugin(TEXT("DreamLoc"));
+	const FString Exported = DreamLoc.IsValid() ? FPaths::ConvertRelativePathToFull(DreamLoc->GetBaseDir() / TEXT("Tests/DreamNarrative/Lighthouse.loc-export.csv")) : FString();
 	if (!TestTrue(TEXT("dnc build wrote the chapter's manifest"), IFileManager::Get().FileExists(*Manifest))
-		|| !TestTrue(TEXT("dnc loc-export wrote the old CSV"), IFileManager::Get().FileExists(*Exported)))
+		|| !TestTrue(TEXT("the old CSV sample is in the plugin"), IFileManager::Get().FileExists(*Exported)))
 	{
-		AddInfo(TEXT("first: pwsh -File Plugins/DreamNarrative/Tools/dnc.ps1 build, then loc-export, with -Project this host"));
+		AddInfo(TEXT("first: pwsh -File Plugins/DreamNarrative/Tools/dnc.ps1 build -Project <this host>"));
 		return false;
 	}
 	FString Work = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("DreamLocTests") / (TEXT("DreamNarrative-") + FGuid::NewGuid().ToString(EGuidFormats::Short)));
@@ -228,7 +231,7 @@ bool FDreamLocDreamNarrativeChapterTest::RunTest(const FString& Parameters)
 	const FDreamLocSyncOutput Synced = DreamLocSync::SyncDirectory(SyncOptions);
 	TestEqual(TEXT("every text of the chapter gets an entry"), Synced.Added, English.Num());
 
-	// 2. The old CSV as a translator sends it back: dnc loc-export's own file, its Translation column filled in.
+	// 2. The old CSV as a translator sends it back: the loc-export sample, its Translation column filled in.
 	FString Csv;
 	FFileHelper::LoadFileToString(Csv, *Exported);
 	TArray<TArray<FString>> Rows = ReadRows(Csv);
