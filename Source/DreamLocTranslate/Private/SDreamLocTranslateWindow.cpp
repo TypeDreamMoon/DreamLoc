@@ -58,10 +58,10 @@ namespace DreamLocTranslateWindowLocal
 	const FName ColumnBackend(TEXT("Backend"));
 	const FName ColumnActions(TEXT("Actions"));
 
-	/** A text on one line of a table cell: line breaks shown, not followed. */
+	/** A text on one line of a table cell: line breaks shown as \n (the editor's fonts have no glyph for a return sign). */
 	FString OneLine(const FString& InText)
 	{
-		return InText.Replace(TEXT("\r\n"), TEXT("⏎")).Replace(TEXT("\n"), TEXT("⏎"));
+		return InText.Replace(TEXT("\r\n"), TEXT("\\n")).Replace(TEXT("\n"), TEXT("\\n"));
 	}
 
 	FText StatusOf(const FDreamLocTranslateRowItem& InItem)

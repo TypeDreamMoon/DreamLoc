@@ -12,6 +12,7 @@
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SWindow.h"
+#include "Widgets/Text/STextBlock.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -410,6 +411,9 @@ bool FDreamLocTranslateWindowClicksTest::RunTest(const FString& Parameters)
 			return ++C->Frames > 120;
 		}
 		C->Frames = 0;
+		const TSharedPtr<SWidget> Source = FindTagged(Row.ToSharedRef(), TEXT("DreamLocTranslate.Source"));
+		TestEqual(TEXT("the source's line break shown as \\n on its line"), Source.IsValid() ? StaticCastSharedPtr<STextBlock>(Source)->GetText().ToString() : FString(),
+			TEXT("第一行\\n第二行"));
 		TestTrue(TEXT("the box takes focus"), FSlateApplication::Get().SetUserFocus(C->User->GetUserIndex(), Box, EFocusCause::Mouse));
 		return true;
 	});
