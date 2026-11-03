@@ -53,6 +53,8 @@ public:
 	/** What it would send, as last counted (every change counts it again). */
 	const FDreamLocTranslateEstimate& GetEstimate() const { return Estimate; }
 	FText GetEstimateText() const { return EstimateText; }
+	/** What the last run it started came to (or that one is under way); empty before any. */
+	FText GetResultText() const { return ResultText; }
 	/** Whether Start would send anything: no errors, something to send, no run under way. */
 	bool CanStart() const;
 	/** Sends it, the window running it. */

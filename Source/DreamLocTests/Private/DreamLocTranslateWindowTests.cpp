@@ -644,11 +644,26 @@ bool FDreamLocTranslatePretranslateTest::RunTest(const FString& Parameters)
 		(*Dialog)->SetScope(EDreamLocPretranslateScope::All);
 		(*Dialog)->SetCultures({ TEXT("en"), TEXT("ja") });
 		TestEqual(TEXT("two cultures"), (*Dialog)->GetEstimate().Entries, 4);
+		(*Dialog)->SetCultures({ TEXT("ja") });
 		TestTrue(TEXT("ready"), (*Dialog)->CanStart());
 	});
+	// The other culture's, the dialog left open: what came back, said in it.
 	AddClick(*this, Steps, D, TEXT("the dialog's Translate"), [D]() { return D->Tagged(TEXT("DreamLocPretranslate.Start")); });
 	AddCheck(Steps, D, [this, D]() { TestTrue(TEXT("a click starts the run"), D->Window->IsRunning() || D->Scenario->Fake->GetCalls(TEXT("openai")).Num() > 0); });
-	// Closed while it runs: the run goes on.
+	AddWait(*this, Steps, D, TEXT("the pre-translation of ja"), 60.0, [D]() { return !D->Window->IsRunning(); });
+	AddCheck(Steps, D, [this, D, Dialog]()
+	{
+		TestTrue(FString::Printf(TEXT("the dialog says what came back (%s)"), *(*Dialog)->GetResultText().ToString()),
+			(*Dialog)->GetResultText().ToString().StartsWith(TEXT("Done: 1 translated, 0 failed, 0 skipped")));
+		// The fake marks every text "en: ", whatever the culture asked for.
+		TestEqual(TEXT("written as machine"), FScenario::Field(D->Entry(TEXT("ja/UI/Menu.dloc"), TEXT("Start")), EDreamLocField::State), TEXT("machine"));
+		TestEqual(TEXT("the window goes to that culture"), D->Window->GetCulture(), TEXT("ja"));
+		TestEqual(TEXT("shows them to review"), int32(D->Window->GetFilter()), int32(EDreamLocReviewFilter::Review));
+		TestEqual(TEXT("the first chosen"), CurrentKey(*D->Window), TEXT("Start"));
+		(*Dialog)->SetCultures({ TEXT("en") });
+	});
+	// en's, the dialog closed while it runs: the run goes on.
+	AddClick(*this, Steps, D, TEXT("the dialog's Translate"), [D]() { return D->Tagged(TEXT("DreamLocPretranslate.Start")); });
 	AddCheck(Steps, D, [D]()
 	{
 		for (const TSharedRef<SWindow>& Child : TArray<TSharedRef<SWindow>>(D->Host->GetChildWindows()))
@@ -656,14 +671,13 @@ bool FDreamLocTranslatePretranslateTest::RunTest(const FString& Parameters)
 			FSlateApplication::Get().RequestDestroyWindow(Child);
 		}
 	});
-	AddWait(*this, Steps, D, TEXT("the pre-translation"), 60.0, [D]() { return !D->Window->IsRunning(); });
+	AddWait(*this, Steps, D, TEXT("the pre-translation of en"), 60.0, [D]() { return !D->Window->IsRunning(); });
 	AddCheck(Steps, D, [this, D]()
 	{
-		TestEqual(TEXT("all four translated"), D->Window->GetLastResult().Translated, 4);
+		TestEqual(TEXT("all three translated"), D->Window->GetLastResult().Translated, 3);
 		TestEqual(TEXT("written as machine"), Describe(D->Entry(TEXT("en/UI/Menu.dloc"), TEXT("Start"))), TEXT("en: 开始游戏|machine"));
-		// The fake marks every text "en: ", whatever the culture asked for.
-		TestEqual(TEXT("the other culture too"), FScenario::Field(D->Entry(TEXT("ja/UI/Menu.dloc"), TEXT("Start")), EDreamLocField::State), TEXT("machine"));
 		TestEqual(TEXT("the reviewed one untouched"), Describe(D->Entry(TEXT("en/UI/Menu.dloc"), TEXT("Back"))), TEXT("Back|done"));
+		TestEqual(TEXT("the window goes to that culture"), D->Window->GetCulture(), TEXT("en"));
 		TestEqual(TEXT("the window shows them to review"), int32(D->Window->GetFilter()), int32(EDreamLocReviewFilter::Review));
 		TestEqual(TEXT("the first chosen"), CurrentKey(*D->Window), D->Window->GetShown().Num() > 0 ? D->Window->GetShown()[0]->Entry.Key : FString(TEXT("(none)")));
 		TestEqual(TEXT("its translation in the box"), D->Window->GetEditText(), D->Window->GetCurrent().IsValid() ? D->Window->GetCurrent()->Translation : FString());

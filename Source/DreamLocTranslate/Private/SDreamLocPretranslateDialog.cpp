@@ -396,6 +396,8 @@ bool SDreamLocPretranslateDialog::Start()
 	const TArray<FString> Chosen = Cultures;
 	return Owner->StartRun(MakeRequest(), [WeakWindow, WeakDialog, Chosen](const FDreamLocTranslateResult& InResult)
 	{
+		UE_LOG(LogDreamLocTranslate, Verbose, TEXT("pre-translation done: %d translated, %d failed, %d skipped, %d error(s); the dialog %s"), InResult.Translated,
+			InResult.Failed, InResult.Skipped, InResult.Errors.Num(), WeakDialog.IsValid() ? TEXT("open") : TEXT("closed"));
 		// What came back waits for review: the window shows it, the first one chosen.
 		if (const TSharedPtr<SDreamLocTranslateWindow> Shown = WeakWindow.Pin())
 		{
