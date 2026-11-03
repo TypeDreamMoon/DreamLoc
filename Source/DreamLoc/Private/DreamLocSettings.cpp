@@ -78,10 +78,10 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 				continue;
 			}
 			Section = Line.Mid(1, Line.Len() - 2).TrimStartAndEnd();
-			if (Section != TEXT("DreamLoc") && Section != TEXT("Fallback") && Section != TEXT("Gather") && Section != TEXT("Publish"))
+			if (Section != TEXT("DreamLoc") && Section != TEXT("Fallback") && Section != TEXT("Gather") && Section != TEXT("Publish") && Section != TEXT("Translate"))
 			{
 				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-					FString::Printf(TEXT("DreamLoc does not read a [%s] section; the sections are [DreamLoc], [Fallback], [Gather] and [Publish]"), *Section));
+					FString::Printf(TEXT("DreamLoc does not read a [%s] section; the sections are [DreamLoc], [Fallback], [Gather], [Publish] and [Translate]"), *Section));
 			}
 			continue;
 		}
@@ -184,10 +184,63 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 					FString::Printf(TEXT("DreamLoc does not read '%s' in [Publish]; it reads Mode"), *Key));
 			}
 		}
+		else if (Section == TEXT("Translate"))
+		{
+			auto Number = [&](int32& OutValue, int32 InMinimum)
+			{
+				const bool bWhole = !Value.IsEmpty() && Value.IsNumeric() && !Value.Contains(TEXT(".")) && FCString::Atoi(*Value) >= InMinimum;
+				if (bWhole)
+				{
+					OutValue = FCString::Atoi(*Value);
+				}
+				else
+				{
+					OutDiagnostics.Emplace(EDreamLocSeverity::Error, DreamLocCode::SettingsSyntax, LineNumber, 1,
+						FString::Printf(TEXT("[Translate] %s is a whole number of at least %d, not '%s'"), *Key, InMinimum, *Value));
+				}
+			};
+			if (Key == TEXT("Profile"))
+			{
+				Settings.TranslateProfile = Value;
+			}
+			else if (Key.StartsWith(TEXT("Profile.")) && Key.Len() > 8)
+			{
+				Settings.TranslateProfileByCulture.Emplace(Key.RightChop(8), Value);
+			}
+			else if (Key == TEXT("Fallback"))
+			{
+				Settings.TranslateFallback = Value;
+			}
+			else if (Key == TEXT("BatchSize"))
+			{
+				Number(Settings.TranslateBatchSize, 1);
+			}
+			else if (Key == TEXT("Concurrency"))
+			{
+				Number(Settings.TranslateConcurrency, 1);
+			}
+			else if (Key == TEXT("Retry"))
+			{
+				Number(Settings.TranslateRetry, 0);
+			}
+			else if (Key == TEXT("Style"))
+			{
+				Settings.TranslateStyle = Value;
+			}
+			else if (Key == TEXT("LocalOnly"))
+			{
+				SetList(Settings.TranslateLocalOnly, Key, Value, bAppend);
+			}
+			else
+			{
+				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
+					FString::Printf(TEXT("DreamLoc does not read '%s' in [Translate]; it reads Profile, Profile.<culture>, Fallback, BatchSize, Concurrency, Retry, Style and LocalOnly"), *Key));
+			}
+		}
 		else
 		{
 			OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-				FString::Printf(TEXT("'%s' is outside the [DreamLoc], [Fallback], [Gather] and [Publish] sections and is not read"), *Key));
+				FString::Printf(TEXT("'%s' is outside the [DreamLoc], [Fallback], [Gather], [Publish] and [Translate] sections and is not read"), *Key));
 		}
 	}
 	return Settings;
@@ -208,6 +261,18 @@ FDreamLocSettings FDreamLocSettings::LoadFromDirectory(const FString& InDLocDire
 		OutDiagnostics->Append(Diagnostics);
 	}
 	return Settings;
+}
+
+FString FDreamLocSettings::GetTranslateProfile(const FString& InCulture) const
+{
+	for (const TPair<FString, FString>& Pair : TranslateProfileByCulture)
+	{
+		if (Pair.Key.Equals(InCulture, ESearchCase::IgnoreCase))
+		{
+			return Pair.Value;
+		}
+	}
+	return TranslateProfile;
 }
 
 TArray<FString> FDreamLocSettings::ExpandFallbacks(TConstArrayView<FString> InPrioritizedCultures) const

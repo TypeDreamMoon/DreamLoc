@@ -26,6 +26,16 @@
  *                                  ; Source, DreamLoc reads them and mods' .dloc files go over them; Native, the
  *                                  ; engine reads them itself (Content/Localization/DreamLoc in LocalizationPaths)
  *
+ *   [Translate]                    ; the editor's translation window (DreamLocTranslate); no keys here, they are the user's
+ *   Profile=deepseek               ; the translator used by default: a [Profile <name>] of the user's translators.ini
+ *   Profile.ja=deepl               ; one for a culture
+ *   Fallback=deepseek              ; the large model a machine translator hands what it cannot do (plural forms, failures)
+ *   BatchSize=40                   ; entries per request at most (default 40)
+ *   Concurrency=2                  ; requests at once (default 2)
+ *   Retry=1                        ; times a translation the checks turn down is sent again with what was wrong (default 1)
+ *   Style=DLoc/_style.md           ; a style guide, relative to the project; DLoc/_style.<culture>.md wins when there is one
+ *   +LocalOnly=DNA/                ; file paths or namespaces starting so only go to a local translator (default none)
+ *
  * A comment is a line starting with `;` or `#`, or the rest of a line after ` ;`. Missing file, missing keys: the
  * defaults. A list key replaces the default; `+Key=` adds to it. The file is read by DreamLoc alone, never by the
  * engine's config system: it sits with the translations, not in Config/, so a translator's checkout carries it.
@@ -46,6 +56,23 @@ struct DREAMLOC_API FDreamLocSettings
 	TArray<FString> GatherExcludePaths = { TEXT("Source/*Editor/*"), TEXT("Content/Developers/*"), TEXT("Content/Localization/*") };
 	/** A packaged game's translations are read by the engine itself rather than by DreamLoc ([Publish] Mode=Native). */
 	bool bPublishNative = false;
+
+	/** [Translate] Profile: the translator profile used by default; empty for none. */
+	FString TranslateProfile;
+	/** [Translate] Profile.<culture>: a culture's own, in the order written. */
+	TArray<TPair<FString, FString>> TranslateProfileByCulture;
+	/** [Translate] Fallback: the large-model profile a machine translator hands what it cannot translate. */
+	FString TranslateFallback;
+	int32 TranslateBatchSize = 40;
+	int32 TranslateConcurrency = 2;
+	int32 TranslateRetry = 1;
+	/** [Translate] Style: a style guide for the translator, relative to the project. */
+	FString TranslateStyle = TEXT("DLoc/_style.md");
+	/** [Translate] LocalOnly: file paths (relative to DLoc/<culture>/) or namespaces whose texts only go to a local translator. */
+	TArray<FString> TranslateLocalOnly;
+
+	/** The profile for a culture: its own, else the default. */
+	FString GetTranslateProfile(const FString& InCulture) const;
 
 	/** The file name, in the DLoc/ folder. */
 	static constexpr const TCHAR* FileName = TEXT("dloc.ini");
