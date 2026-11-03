@@ -287,11 +287,18 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 			];
 	};
 
-	TSharedRef<SHorizontalBox> Filters = SNew(SHorizontalBox);
+	// Wraps when the window is narrow: nothing at the end is cut off. Each filter a slot of its own, so they wrap too.
+	const TSharedRef<SWrapBox> Row = SNew(SWrapBox).UseAllottedSize(true);
+	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
+	[
+		Choices(CultureCombo, &CultureChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoCulture", "(no culture)") : FText::FromString(InName); },
+			[this](const FString& InName) { SetCulture(InName); }, [this]() { return Culture; }, TEXT("DreamLocTranslate.Culture"),
+			LOCTEXT("CultureTip", "The culture to review"))
+	];
 	for (int32 Index = 0; Index < int32(EDreamLocReviewFilter::Count); ++Index)
 	{
 		const EDreamLocReviewFilter Each = EDreamLocReviewFilter(Index);
-		Filters->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 2.0f, 0.0f)
+		Row->AddSlot().Padding(0.0f, 0.0f, Index + 1 < int32(EDreamLocReviewFilter::Count) ? 2.0f : 6.0f, 4.0f).VAlign(VAlign_Center)
 		[
 			SNew(SCheckBox)
 			.AddMetaData<FTagMetaData>(FTagMetaData(FilterTag(Each)))
@@ -304,71 +311,64 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 		];
 	}
 
+	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
+	[
+		SNew(SBox).WidthOverride(240.0f)
+		[
+			SAssignNew(SearchBox, SSearchBox)
+			.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Search")))
+			.HintText(LOCTEXT("SearchHint", "Key, source or translation"))
+			.OnTextChanged_Lambda([this](const FText& InText) { SetSearch(InText.ToString()); })
+		]
+	];
+	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
+	[
+		SNew(SCheckBox)
+		.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Files")))
+		.Style(FAppStyle::Get(), TEXT("ToggleButtonCheckbox"))
+		.ToolTipText(LOCTEXT("FilesTip", "Show the files, to look at one alone"))
+		.IsChecked_Lambda([this]() { return bShowFiles ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+		.OnCheckStateChanged_Lambda([this](ECheckBoxState InState) { bShowFiles = InState == ECheckBoxState::Checked; })
+		[
+			SNew(SBox).Padding(FMargin(6.0f, 2.0f))[SNew(STextBlock).Text(LOCTEXT("FilesButton", "Files"))]
+		]
+	];
+	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
+	[
+		Choices(ReferenceCombo, &ReferenceChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoReference", "No reference") : FText::Format(LOCTEXT("Reference", "Reference: {0}"), FText::FromString(InName)); },
+			[this](const FString& InName) { SetReferenceCulture(InName); }, [this]() { return ReferenceCulture; }, TEXT("DreamLocTranslate.ReferenceCulture"),
+			LOCTEXT("ReferenceTip", "Another culture's translations, beside this one's"))
+	];
+	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
+	[
+		Choices(ProfileCombo, &ProfileChoices, [this](const FString& InName) { return ProfileLabel(InName); },
+			[this](const FString& InName) { SetProfile(InName); }, [this]() { return Profile; }, TEXT("DreamLocTranslate.Profile"),
+			LOCTEXT("ProfileTip", "The translator for this window's actions"))
+	];
+	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
+	[
+		SNew(SButton)
+		.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Settings")))
+		.ButtonStyle(FAppStyle::Get(), TEXT("SimpleButton"))
+		.ToolTipText(LOCTEXT("SettingsTip", "Your translators: Editor Preferences > Plugins > DreamLoc translators"))
+		.OnClicked_Lambda([]() { DreamLocTranslateWindow::OpenTranslatorsSettings(); return FReply::Handled(); })
+		[
+			SNew(SImage).Image(FAppStyle::GetBrush(TEXT("Icons.Settings"))).ColorAndOpacity(FSlateColor::UseForeground())
+		]
+	];
+	Row->AddSlot().Padding(0.0f, 0.0f, 0.0f, 4.0f).VAlign(VAlign_Center)
+	[
+		SNew(SButton)
+		.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Pretranslate")))
+		.Text(LOCTEXT("Pretranslate", "AI pre-translate..."))
+		.ToolTipText(LOCTEXT("PretranslateTip", "Translate many entries at once; what comes back waits here for review"))
+		.OnClicked_Lambda([this]() { OpenPretranslate(); return FReply::Handled(); })
+	];
+
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			// Wraps when the window is narrow: nothing at the end is cut off.
-			SNew(SWrapBox).UseAllottedSize(true)
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
-			[
-				Choices(CultureCombo, &CultureChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoCulture", "(no culture)") : FText::FromString(InName); },
-					[this](const FString& InName) { SetCulture(InName); }, [this]() { return Culture; }, TEXT("DreamLocTranslate.Culture"),
-					LOCTEXT("CultureTip", "The culture to review"))
-			]
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)[Filters]
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(240.0f)
-				[
-					SAssignNew(SearchBox, SSearchBox)
-					.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Search")))
-					.HintText(LOCTEXT("SearchHint", "Key, source or translation"))
-					.OnTextChanged_Lambda([this](const FText& InText) { SetSearch(InText.ToString()); })
-				]
-			]
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
-			[
-				SNew(SCheckBox)
-				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Files")))
-				.Style(FAppStyle::Get(), TEXT("ToggleButtonCheckbox"))
-				.ToolTipText(LOCTEXT("FilesTip", "Show the files, to look at one alone"))
-				.IsChecked_Lambda([this]() { return bShowFiles ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-				.OnCheckStateChanged_Lambda([this](ECheckBoxState InState) { bShowFiles = InState == ECheckBoxState::Checked; })
-				[
-					SNew(SBox).Padding(FMargin(6.0f, 2.0f))[SNew(STextBlock).Text(LOCTEXT("FilesButton", "Files"))]
-				]
-			]
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
-			[
-				Choices(ReferenceCombo, &ReferenceChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoReference", "No reference") : FText::Format(LOCTEXT("Reference", "Reference: {0}"), FText::FromString(InName)); },
-					[this](const FString& InName) { SetReferenceCulture(InName); }, [this]() { return ReferenceCulture; }, TEXT("DreamLocTranslate.ReferenceCulture"),
-					LOCTEXT("ReferenceTip", "Another culture's translations, beside this one's"))
-			]
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
-			[
-				Choices(ProfileCombo, &ProfileChoices, [this](const FString& InName) { return ProfileLabel(InName); },
-					[this](const FString& InName) { SetProfile(InName); }, [this]() { return Profile; }, TEXT("DreamLocTranslate.Profile"),
-					LOCTEXT("ProfileTip", "The translator for this window's actions"))
-			]
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
-			[
-				SNew(SButton)
-				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Settings")))
-				.ButtonStyle(FAppStyle::Get(), TEXT("SimpleButton"))
-				.ToolTipText(LOCTEXT("SettingsTip", "Your translators: Editor Preferences > Plugins > DreamLoc translators"))
-				.OnClicked_Lambda([]() { DreamLocTranslateWindow::OpenTranslatorsSettings(); return FReply::Handled(); })
-				[
-					SNew(SImage).Image(FAppStyle::GetBrush(TEXT("Icons.Settings"))).ColorAndOpacity(FSlateColor::UseForeground())
-				]
-			]
-			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 0.0f, 4.0f).VAlign(VAlign_Center)
-			[
-				SNew(SButton)
-				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Pretranslate")))
-				.Text(LOCTEXT("Pretranslate", "AI pre-translate..."))
-				.ToolTipText(LOCTEXT("PretranslateTip", "Translate many entries at once; what comes back waits here for review"))
-				.OnClicked_Lambda([this]() { OpenPretranslate(); return FReply::Handled(); })
-			]
+			Row
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
 		[

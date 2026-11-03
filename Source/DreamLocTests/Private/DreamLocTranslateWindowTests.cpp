@@ -186,12 +186,12 @@ namespace DreamLocTranslateWindowTestsLocal
 	using FDeskRef = TSharedRef<FDesk>;
 
 	/** A widget in a window of the test's own: the review window's size, far off the screens, never activated. */
-	FDeskRef MakeDeskWith(const FScenarioRef& InScenario, const TSharedRef<SWidget>& InContent)
+	FDeskRef MakeDeskWith(const FScenarioRef& InScenario, const TSharedRef<SWidget>& InContent, const FVector2D& InSize = DreamLocTranslateWindow::GetDefaultSize())
 	{
 		const FDeskRef D = MakeShared<FDesk>(InScenario);
 		D->Host = SNew(SWindow)
 			.Title(FText::FromString(TEXT("DreamLoc review desk")))
-			.ClientSize(DreamLocTranslateWindow::GetDefaultSize())
+			.ClientSize(InSize)
 			.ScreenPosition(FVector2D(-20000.0, -20000.0))
 			.AutoCenter(EAutoCenter::None)
 			.SaneWindowPlacement(false)
@@ -211,10 +211,10 @@ namespace DreamLocTranslateWindowTestsLocal
 	}
 
 	/** The review window, so. */
-	FDeskRef MakeDesk(const FScenarioRef& InScenario)
+	FDeskRef MakeDesk(const FScenarioRef& InScenario, const FVector2D& InSize = DreamLocTranslateWindow::GetDefaultSize())
 	{
 		const TSharedRef<SDreamLocTranslateWindow> Window = SNew(SDreamLocTranslateWindow).DLocDirectory(InScenario->DLoc).OwnerDirectory(InScenario->Root);
-		const FDeskRef D = MakeDeskWith(InScenario, Window);
+		const FDeskRef D = MakeDeskWith(InScenario, Window, InSize);
 		D->Window = Window;
 		return D;
 	}
@@ -1224,6 +1224,50 @@ bool FDreamLocTranslateCultureListTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the window goes to en"), D->Window->GetCulture() + TEXT(" ") + CurrentKey(*D->Window), TEXT("en Start"));
 		TestFalse(TEXT("one no culture has"), D->Window->SelectInAnyCulture(TEXT("Menu"), TEXT("Nothing")));
 		TestEqual(TEXT("and the window stays"), D->Window->GetCulture(), TEXT("en"));
+	});
+	AddEnd(Steps, D);
+	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateNarrowTest, "DreamLoc.Translate.Window.ANarrowWindowWrapsItsToolbarNothingCutOff",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateNarrowTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("Narrow")))
+	{
+		return false;
+	}
+	S->Write(TEXT("dloc.ini"), TEXT("[DreamLoc]\nSourceCulture=zh-Hans\nTargetCultures=en\n"));
+	S->Write(TEXT("en/UI/Menu.dloc"), MakeDloc(TEXT("en"), TEXT("Menu"), { { TEXT("Start"), TEXT("开始游戏") } }));
+	const FDeskRef D = MakeDesk(S, FVector2D(520.0, 760.0));
+	TArray<TFunction<bool()>> Steps;
+	// A few frames: a wrap box lays out by the width it had the frame before.
+	for (int32 Frame = 0; Frame < 3; ++Frame)
+	{
+		AddCheck(Steps, D, []() {});
+	}
+	AddCheck(Steps, D, [this, D]()
+	{
+		const FGeometry Window = D->Window->GetTickSpaceGeometry();
+		const double Right = Window.LocalToAbsolute(Window.GetLocalSize()).X;
+		for (const TCHAR* Tag : { TEXT("DreamLocTranslate.Filter.All"), TEXT("DreamLocTranslate.Filter.Untranslated"), TEXT("DreamLocTranslate.Filter.Stale"),
+			TEXT("DreamLocTranslate.Filter.Review"), TEXT("DreamLocTranslate.Filter.Problems"), TEXT("DreamLocTranslate.Filter.Done"),
+			TEXT("DreamLocTranslate.Search"), TEXT("DreamLocTranslate.Profile"), TEXT("DreamLocTranslate.Pretranslate") })
+		{
+			const TSharedPtr<SWidget> Found = D->Tagged(Tag);
+			FWidgetPath Path;
+			if (!Found.IsValid() || !FSlateApplication::Get().FindPathToWidget(Found.ToSharedRef(), Path))
+			{
+				AddError(FString::Printf(TEXT("%s is not laid out"), Tag));
+				continue;
+			}
+			const FGeometry& Geometry = Path.Widgets.Last().Geometry;
+			const double Edge = Geometry.LocalToAbsolute(Geometry.GetLocalSize()).X;
+			TestTrue(FString::Printf(TEXT("%s inside a 520-wide window (right edge %.0f, the window's %.0f)"), Tag, Edge, Right), Edge <= Right + 0.5);
+		}
 	});
 	AddEnd(Steps, D);
 	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
