@@ -10,6 +10,7 @@
 #include "Styling/AppStyle.h"
 #include "ToolMenus.h"
 #include "Widgets/Docking/SDockTab.h"
+#include "Widgets/SWindow.h"
 
 #define LOCTEXT_NAMESPACE "DreamLocTranslate"
 
@@ -89,16 +90,54 @@ FVector2D DreamLocTranslateWindow::GetDefaultSize()
 	return FVector2D(1280.0, 760.0);
 }
 
+TOptional<FSlateRect> DreamLocTranslateWindow::FitRect(const FVector2D& InSize, bool bInMaximized, const FSlateRect& InWorkArea, float InDPIScale)
+{
+	const FVector2D Area(InWorkArea.GetSize());
+	if (!bInMaximized && InSize.X <= Area.X * 0.9 && InSize.Y <= Area.Y * 0.9)
+	{
+		return TOptional<FSlateRect>();
+	}
+	const FVector2D Wanted = FVector2D::Min(GetDefaultSize() * InDPIScale, Area * 0.9);
+	const FVector2D TopLeft = FVector2D(InWorkArea.GetTopLeft()) + (Area - Wanted) * 0.5;
+	return FSlateRect(TopLeft, TopLeft + Wanted);
+}
+
+bool DreamLocTranslateWindow::FitWindow(SWindow& InWindow)
+{
+	const bool bMaximized = InWindow.IsWindowMaximized();
+	const TOptional<FSlateRect> Fitted = FitRect(FVector2D(InWindow.GetSizeInScreen()), bMaximized, FSlateApplication::Get().GetWorkArea(InWindow.GetRectInScreen()),
+		InWindow.GetDPIScaleFactor());
+	if (!Fitted.IsSet())
+	{
+		return false;
+	}
+	if (bMaximized)
+	{
+		InWindow.Restore();
+	}
+	InWindow.ReshapeWindow(Fitted.GetValue());
+	return true;
+}
+
 TSharedPtr<SDreamLocTranslateWindow> DreamLocTranslateWindow::Open()
 {
 	if (!FSlateApplication::IsInitialized())
 	{
 		return nullptr;
 	}
+	const bool bWasOpen = FGlobalTabmanager::Get()->FindExistingLiveTab(DreamLocTranslateModuleLocal::TabName).IsValid();
 	const TSharedPtr<SDockTab> Tab = FGlobalTabmanager::Get()->TryInvokeTab(DreamLocTranslateModuleLocal::TabName);
 	if (!Tab.IsValid())
 	{
 		return nullptr;
+	}
+	// A window of its own that comes back filling the screen (a size the layout kept, or maximized) opens at the
+	// default size instead; one docked in the editor's main window, or already open, is left as it is.
+	const TSharedPtr<SWindow> Window = Tab->GetParentWindow();
+	if (!bWasOpen && Window.IsValid() && Window != FGlobalTabmanager::Get()->GetRootWindow() && FitWindow(*Window))
+	{
+		UE_LOG(LogDreamLocTranslate, Log, TEXT("The translation window came back filling the screen; opened at %.0f x %.0f instead"),
+			GetDefaultSize().X, GetDefaultSize().Y);
 	}
 	return StaticCastSharedRef<SDreamLocTranslateWindow>(Tab->GetContent());
 }

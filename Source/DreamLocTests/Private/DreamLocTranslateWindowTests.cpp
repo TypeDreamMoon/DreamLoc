@@ -441,4 +441,24 @@ bool FDreamLocTranslateWindowClicksTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateWindowFitTest, "DreamLoc.Translate.Window.AWindowThatComesBackFillingTheScreenOpensAtTheDefaultSize",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateWindowFitTest::RunTest(const FString& Parameters)
+{
+	auto Describe = [](const TOptional<FSlateRect>& InRect)
+	{
+		return InRect.IsSet() ? FString::Printf(TEXT("%.0f,%.0f %.0f x %.0f"), InRect->Left, InRect->Top, InRect->GetSize().X, InRect->GetSize().Y) : FString(TEXT("left as it is"));
+	};
+	// A 3136-pixel screen at 200%: the size a layout kept, filling it, comes back as the default size in the middle.
+	TestEqual(TEXT("filling a high-DPI screen"), Describe(DreamLocTranslateWindow::FitRect(FVector2D(3136.0, 1680.0), false, FSlateRect(0.0f, 0.0f, 3136.0f, 1680.0f), 2.0f)),
+		TEXT("288,84 2560 x 1512"));
+	TestEqual(TEXT("maximized"), Describe(DreamLocTranslateWindow::FitRect(FVector2D(1280.0, 760.0), true, FSlateRect(0.0f, 0.0f, 1920.0f, 1040.0f), 1.0f)),
+		TEXT("320,140 1280 x 760"));
+	TestEqual(TEXT("on a second screen"), Describe(DreamLocTranslateWindow::FitRect(FVector2D(1900.0, 1000.0), false, FSlateRect(1920.0f, 0.0f, 3840.0f, 1040.0f), 1.0f)),
+		TEXT("2240,140 1280 x 760"));
+	TestEqual(TEXT("a size a person chose"), Describe(DreamLocTranslateWindow::FitRect(FVector2D(1500.0, 900.0), false, FSlateRect(0.0f, 0.0f, 1920.0f, 1040.0f), 1.0f)),
+		TEXT("left as it is"));
+	return true;
+}
+
 #endif
