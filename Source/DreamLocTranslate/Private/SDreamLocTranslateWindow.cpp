@@ -135,19 +135,29 @@ namespace DreamLocTranslateWindowLocal
 
 		virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& InColumn) override
 		{
-			const FDreamLocTranslateRow& Row = Item->Row;
-			auto Cell = [](const FString& InText) -> TSharedRef<SWidget>
+			// Bound, not copied: a row translated again keeps its widgets and shows its new values.
+			auto Cell = [this](const TCHAR* InTag, TFunction<FString(const FDreamLocTranslateRow&)> InValue) -> TSharedRef<SWidget>
 			{
+				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
 				return SNew(SBox).Padding(FMargin(4.0f, 2.0f)).VAlign(VAlign_Center)
 				[
-					SNew(STextBlock).Text(FText::FromString(OneLine(InText))).ToolTipText(FText::FromString(InText))
+					SNew(STextBlock)
+					.AddMetaData<FTagMetaData>(FTagMetaData(InTag))
+					.Text_Lambda([Shown, InValue]() { return FText::FromString(OneLine(InValue(Shown->Row))); })
+					.ToolTipText_Lambda([Shown, InValue]() { return FText::FromString(InValue(Shown->Row)); })
 				];
 			};
-			if (InColumn == ColumnFile) { return Cell(Row.Culture / Row.File); }
-			if (InColumn == ColumnKey) { return Cell(Row.Namespace.IsEmpty() ? Row.Key : Row.Namespace + TEXT(" / ") + Row.Key); }
-			if (InColumn == ColumnSource) { return Cell(Row.Source); }
-			if (InColumn == ColumnOld) { return Cell(Row.OldText); }
-			if (InColumn == ColumnBackend) { return Cell(Row.Backend); }
+			if (InColumn == ColumnFile) { return Cell(TEXT("DreamLocTranslate.File"), [](const FDreamLocTranslateRow& InRow) { return InRow.Culture / InRow.File; }); }
+			if (InColumn == ColumnKey)
+			{
+				return Cell(TEXT("DreamLocTranslate.Key"), [](const FDreamLocTranslateRow& InRow)
+				{
+					return InRow.Namespace.IsEmpty() ? InRow.Key : InRow.Namespace + TEXT(" / ") + InRow.Key;
+				});
+			}
+			if (InColumn == ColumnSource) { return Cell(TEXT("DreamLocTranslate.Source"), [](const FDreamLocTranslateRow& InRow) { return InRow.Source; }); }
+			if (InColumn == ColumnOld) { return Cell(TEXT("DreamLocTranslate.Old"), [](const FDreamLocTranslateRow& InRow) { return InRow.OldText; }); }
+			if (InColumn == ColumnBackend) { return Cell(TEXT("DreamLocTranslate.Backend"), [](const FDreamLocTranslateRow& InRow) { return InRow.Backend; }); }
 			if (InColumn == ColumnNew)
 			{
 				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
