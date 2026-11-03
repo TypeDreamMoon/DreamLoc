@@ -32,6 +32,8 @@ public:
 				.SetDisplayName(LOCTEXT("TabTitle", "DreamLoc Translate"))
 				.SetTooltipText(LOCTEXT("TabTooltip", "Translate the .dloc files with a large model or a machine translator, and review what comes back"))
 				.SetMenuType(ETabSpawnerMenuType::Hidden);
+			// Without it a new window for the tab takes the tab manager's own default.
+			FTabManager::RegisterDefaultTabWindowSize(FTabId(DreamLocTranslateModuleLocal::TabName), DreamLocTranslateWindow::GetDefaultSize());
 		}
 		UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FDreamLocTranslateModule::RegisterMenus));
 	}
@@ -46,6 +48,7 @@ public:
 		if (FSlateApplication::IsInitialized())
 		{
 			FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(DreamLocTranslateModuleLocal::TabName);
+			FTabManager::UnregisterDefaultTabWindowSize(FTabId(DreamLocTranslateModuleLocal::TabName));
 		}
 	}
 
@@ -79,6 +82,11 @@ private:
 FName DreamLocTranslateWindow::GetTabName()
 {
 	return DreamLocTranslateModuleLocal::TabName;
+}
+
+FVector2D DreamLocTranslateWindow::GetDefaultSize()
+{
+	return FVector2D(1280.0, 760.0);
 }
 
 TSharedPtr<SDreamLocTranslateWindow> DreamLocTranslateWindow::Open()
