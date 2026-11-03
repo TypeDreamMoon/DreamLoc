@@ -41,6 +41,15 @@ struct DREAMLOCTRANSLATE_API FDreamLocTranslateRequest
 	FString ReportDirectory;
 	/** Write the translations into the .dloc files (false: only the result). */
 	bool bWrite = true;
+	/**
+	 * A suggestion for a person to look at, not a run: the entries asked for (Entries) whatever their state, reviewed ones
+	 * too; nothing written (bWrite aside) and no report. What each came back as is its row's NewText, or RejectedText with
+	 * what the checks said.
+	 */
+	bool bSuggest = false;
+	/** With bSuggest: a translation to put right and what is wrong with it, sent with each entry for a large model to amend. */
+	FString AmendText;
+	FString AmendProblems;
 };
 
 /**

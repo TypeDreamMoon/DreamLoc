@@ -280,6 +280,10 @@ namespace DreamLocTranslateFlowLocal
 					Options.Only.Add(Category.Value);
 				}
 			}
+			if (InRequest.bSuggest)
+			{
+				Options.Only = { TEXT("all") };
+			}
 			Options.Files = InRequest.Files;
 			Options.Manifests = Manifests;
 			TArray<FDreamLocReportLine> Messages;
@@ -335,7 +339,8 @@ namespace DreamLocTranslateFlowLocal
 			for (int32 Index = 0; Index < Plan.Collected.Entries.Num(); ++Index)
 			{
 				const FDreamLocExchangeEntry& Entry = Plan.Collected.Entries[Index];
-				if (ReviewedIds.Contains(IdOf(Entry.Namespace, Entry.Key)))
+				// A suggestion is for a person to look at: a reviewed entry may have one too.
+				if (!InRequest.bSuggest && ReviewedIds.Contains(IdOf(Entry.Namespace, Entry.Key)))
 				{
 					const int32 ItemIndex = Plan.Items.AddDefaulted();
 					Plan.ItemOfEntry[Index] = ItemIndex;
@@ -384,6 +389,16 @@ namespace DreamLocTranslateFlowLocal
 				Unit.Prev = Entry.Prev;
 				Unit.PreviousText = Entry.PreviousText;
 				Unit.Reference = Reviewed.FindRef(Entry.Source);
+				if (InRequest.bSuggest)
+				{
+					// Its own reviewed translation is no reference to stay with: the person asks for another.
+					if (Unit.Reference.Equals(Entry.Text, ESearchCase::CaseSensitive))
+					{
+						Unit.Reference.Reset();
+					}
+					Unit.LastText = InRequest.AmendText;
+					Unit.Problems = InRequest.AmendProblems;
+				}
 				Item.Entries.Add(Index);
 				Item.Places.Emplace(Entry.Namespace, Entry.At);
 				Item.bForms = DreamLocTranslateFlow::HasForms(Entry.Source);
@@ -994,7 +1009,7 @@ FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequ
 		}
 
 		// Into the .dloc files: as machine translations, a reviewed one never touched; a stale one loses its prev.
-		if (InRequest.bWrite && Translated.Entries.Num() > 0)
+		if (InRequest.bWrite && !InRequest.bSuggest && Translated.Entries.Num() > 0)
 		{
 			DreamLocExchange::FImportOptions Options;
 			Options.Culture = Plan.Culture;
@@ -1035,7 +1050,7 @@ FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequ
 			Warning = Scrub(Warning, Prepared.Secrets);
 		}
 		const double Seconds = FPlatformTime::Seconds() - CultureStarted;
-		const FString Report = WriteReport(ReportDirectory, Plan, Prepared, Rows, Stats, Seconds, InCancel.Load(), Warnings);
+		const FString Report = InRequest.bSuggest ? FString() : WriteReport(ReportDirectory, Plan, Prepared, Rows, Stats, Seconds, InCancel.Load(), Warnings);
 		if (!Report.IsEmpty())
 		{
 			Result.ReportPaths.Add(Report);
