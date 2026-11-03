@@ -49,6 +49,15 @@ bool FDreamLocTranslateBatchesTest::RunTest(const FString& Parameters)
 	const FDreamLocTranslateEstimate Estimate = DreamLocTranslateFlow::Estimate(Request);
 	TestEqual(TEXT("the estimate"), FString::Printf(TEXT("%d entries, %d to send, %d requests, %d characters"), Estimate.Entries, Estimate.Distinct, Estimate.Batches,
 		Estimate.Characters), TEXT("6 entries, 5 to send, 3 requests, 12 characters"));
+	// No translator chosen: what there is to translate is still counted; only the requests are not.
+	FDreamLocTranslateRequest Unchosen = Request;
+	FDreamLocSettings NoProfile = FDreamLocSettings::LoadFromDirectory(S->DLoc);
+	NoProfile.TranslateProfile.Reset();
+	Unchosen.Settings = NoProfile;
+	const FDreamLocTranslateEstimate Counted = DreamLocTranslateFlow::Estimate(Unchosen);
+	TestEqual(TEXT("the estimate without a translator"), FString::Printf(TEXT("%d entries, %d to send, %d requests, %d characters, known %d"), Counted.Entries,
+		Counted.Distinct, Counted.Batches, Counted.Characters, Counted.bTranslatorKnown ? 1 : 0), TEXT("6 entries, 5 to send, 0 requests, 12 characters, known 0"));
+	TestTrue(TEXT("and says why it cannot send"), FString::Join(Counted.Errors, TEXT("\n")).Contains(TEXT("no translator chosen")));
 	S->Fake->Delay = 0.25f;
 	S->Run(Request);
 	ADD_LATENT_AUTOMATION_COMMAND(FAfterRun(this, S, [this](FScenario& InS)

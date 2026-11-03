@@ -237,17 +237,16 @@ namespace DreamLocTranslateFlowLocal
 			FCulturePlan& Plan = Out.Cultures.AddDefaulted_GetRef();
 			Plan.Culture = Culture;
 			const FString ProfileName = !InRequest.Profile.IsEmpty() ? InRequest.Profile : Out.Settings.GetTranslateProfile(Culture);
+			// Without a translator the entries are still collected: what there is to translate does not depend on it.
 			if (ProfileName.IsEmpty())
 			{
 				Out.Errors.AddUnique(FString::Printf(TEXT("%s: no translator chosen ([Translate] Profile in dloc.ini)"), *Culture));
-				continue;
 			}
-			Plan.Main = Out.Translators.Get(Out.Profiles, ProfileName, Out.Errors);
-			if (Plan.Main == nullptr)
+			else
 			{
-				continue;
+				Plan.Main = Out.Translators.Get(Out.Profiles, ProfileName, Out.Errors);
 			}
-			if (!FallbackName.IsEmpty() && FallbackName != ProfileName)
+			if (Plan.Main != nullptr && !FallbackName.IsEmpty() && FallbackName != ProfileName)
 			{
 				IDreamLocTranslator* Fallback = Out.Translators.Get(Out.Profiles, FallbackName, Out.Warnings);
 				if (Fallback != nullptr && Fallback->GetKind() != EDreamLocTranslatorKind::LargeModel)
@@ -392,7 +391,7 @@ namespace DreamLocTranslateFlowLocal
 			}
 			for (FItem& Item : Plan.Items)
 			{
-				if (!Item.bDecided)
+				if (!Item.bDecided && Plan.Main != nullptr)
 				{
 					Route(Item, Plan, Out.Settings.SourceCulture);
 				}
@@ -852,6 +851,7 @@ FDreamLocTranslateEstimate DreamLocTranslateFlow::Estimate(const FDreamLocTransl
 	for (const FCulturePlan& Plan : Prepared.Cultures)
 	{
 		Out.Entries += Plan.Collected.Entries.Num();
+		Out.bTranslatorKnown &= Plan.Main != nullptr;
 		for (const FItem& Item : Plan.Items)
 		{
 			if (Item.bDecided)
@@ -862,7 +862,7 @@ FDreamLocTranslateEstimate DreamLocTranslateFlow::Estimate(const FDreamLocTransl
 			++Out.Distinct;
 			const int32 Length = Item.Unit.Source.Len();
 			Out.Characters += Length;
-			if (Item.Translator->GetKind() == EDreamLocTranslatorKind::LargeModel)
+			if (Item.Translator != nullptr && Item.Translator->GetKind() == EDreamLocTranslatorKind::LargeModel)
 			{
 				int32 Context = Item.Unit.Note.Len() + Item.Unit.Reference.Len() + Item.Unit.PreviousText.Len();
 				for (const FString& Near : Item.Unit.Nearby)

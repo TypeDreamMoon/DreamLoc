@@ -801,23 +801,28 @@ FDreamLocTranslateEstimate SDreamLocTranslateWindow::RunEstimate()
 	{
 		Estimate = DreamLocTranslateFlow::Estimate(Request);
 	}
-	if (Estimate.Errors.Num() > 0)
+	if (Request.Cultures.IsEmpty() || bNoFiles)
 	{
 		EstimateText = FText::FromString(FString::Join(Estimate.Errors, TEXT("\n")));
+		return Estimate;
 	}
-	else
-	{
-		FFormatNamedArguments Args;
-		Args.Add(TEXT("Entries"), Estimate.Entries);
-		Args.Add(TEXT("Distinct"), Estimate.Distinct);
-		Args.Add(TEXT("Characters"), Estimate.Characters);
-		Args.Add(TEXT("Tokens"), Estimate.Tokens);
-		Args.Add(TEXT("Batches"), Estimate.Batches);
-		Args.Add(TEXT("Skipped"), Estimate.Skipped);
-		EstimateText = FText::Format(LOCTEXT("EstimateResult",
+	// The entries and characters stand without a translator; the requests and tokens need one.
+	FFormatNamedArguments Args;
+	Args.Add(TEXT("Entries"), Estimate.Entries);
+	Args.Add(TEXT("Distinct"), Estimate.Distinct);
+	Args.Add(TEXT("Characters"), Estimate.Characters);
+	Args.Add(TEXT("Tokens"), Estimate.Tokens);
+	Args.Add(TEXT("Batches"), Estimate.Batches);
+	Args.Add(TEXT("Skipped"), Estimate.Skipped);
+	const FText Counts = Estimate.bTranslatorKnown
+		? FText::Format(LOCTEXT("EstimateResult",
 			"{Entries} {Entries}|plural(one=entry,other=entries): {Distinct} {Distinct}|plural(one=text,other=texts) to send, {Characters} {Characters}|plural(one=character,other=characters), about {Tokens} {Tokens}|plural(one=token,other=tokens) for a large model, {Batches} {Batches}|plural(one=request,other=requests); {Skipped} left out"),
+			Args)
+		: FText::Format(LOCTEXT("EstimateWithoutTranslator",
+			"{Entries} {Entries}|plural(one=entry,other=entries): {Distinct} {Distinct}|plural(one=text,other=texts) to send, {Characters} {Characters}|plural(one=character,other=characters); choose a translator to count the requests and tokens"),
 			Args);
-	}
+	EstimateText = Estimate.Errors.IsEmpty() ? Counts
+		: FText::Format(LOCTEXT("EstimateAndErrors", "{0}\n{1}"), Counts, FText::FromString(FString::Join(Estimate.Errors, TEXT("\n"))));
 	return Estimate;
 }
 

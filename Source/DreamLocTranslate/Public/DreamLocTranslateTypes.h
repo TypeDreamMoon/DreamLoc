@@ -184,6 +184,9 @@ struct DREAMLOCTRANSLATE_API FDreamLocTranslateEstimate
 	int32 Batches = 0;
 	/** Left out: only for local translators, a plural form a machine translator cannot keep, a language not served. */
 	int32 Skipped = 0;
+	/** Every culture has a translator: the requests, tokens and what is left out are counted too. */
+	bool bTranslatorKnown = true;
+	/** Why it cannot be sent (no translator chosen, a profile that does not work...); the counts above stand regardless. */
 	TArray<FString> Errors;
 };
 
