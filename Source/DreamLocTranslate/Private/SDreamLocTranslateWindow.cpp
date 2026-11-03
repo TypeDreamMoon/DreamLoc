@@ -3,38 +3,44 @@
 #include "SDreamLocTranslateWindow.h"
 
 #include "Async/Async.h"
-#include "DreamLocSync.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
+#include "DirectoryWatcherModule.h"
+#include "DreamLocChips.h"
+#include "DreamLocExtract.h"
+#include "DreamLocFile.h"
 #include "DreamLocTextSource.h"
 #include "DreamLocTranslateConfig.h"
 #include "DreamLocTranslator.h"
-#include "HAL/FileManager.h"
+#include "Editor.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "HAL/PlatformApplicationMisc.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
-#include "Misc/FileHelper.h"
-#include "Misc/MessageDialog.h"
+#include "IDirectoryWatcher.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeLock.h"
+#include "Modules/ModuleManager.h"
+#include "SDreamLocPretranslateDialog.h"
+#include "SDreamLocTranslateEditor.h"
 #include "SourceCodeNavigation.h"
 #include "Styling/AppStyle.h"
-#include "Framework/Application/SlateApplication.h"
-#include "Layout/WidgetPath.h"
 #include "Styling/StyleColors.h"
+#include "Subsystems/AssetEditorSubsystem.h"
 #include "Types/ISlateMetaData.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
-#include "Widgets/Input/SEditableTextBox.h"
-#include "Widgets/Input/SMultiLineEditableTextBox.h"
-#include "Widgets/Input/SSegmentedControl.h"
+#include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Layout/SGridPanel.h"
-#include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Layout/SSeparator.h"
+#include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SSplitter.h"
-#include "Widgets/Layout/SWidgetSwitcher.h"
-#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Notifications/SProgressBar.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/SToolTip.h"
+#include "Widgets/SWindow.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/SHeaderRow.h"
 #include "Widgets/Views/STableRow.h"
@@ -46,285 +52,137 @@ struct SDreamLocTranslateWindow::FRunState
 	TAtomic<bool> Cancel{ false };
 	FCriticalSection Lock;
 	FDreamLocTranslateProgress Progress;
-	double Started = 0.0;
 };
 
 namespace DreamLocTranslateWindowLocal
 {
-	const FName ColumnFile(TEXT("File"));
+	const FName ColumnStatus(TEXT("Status"));
 	const FName ColumnKey(TEXT("Key"));
 	const FName ColumnSource(TEXT("Source"));
-	const FName ColumnOld(TEXT("Old"));
-	const FName ColumnNew(TEXT("New"));
-	const FName ColumnCheck(TEXT("Check"));
-	const FName ColumnBackend(TEXT("Backend"));
-	const FName ColumnActions(TEXT("Actions"));
+	const FName ColumnTranslation(TEXT("Translation"));
+	const FName ColumnReference(TEXT("Reference"));
+	const FName ColumnProblems(TEXT("Problems"));
 
-	/** A text on one line of a table cell: line breaks shown as \n (the editor's fonts have no glyph for a return sign). */
-	FString OneLine(const FString& InText)
+	const FSlateBrush* DotBrush(bool bInHollow)
 	{
-		return InText.Replace(TEXT("\r\n"), TEXT("\\n")).Replace(TEXT("\n"), TEXT("\\n"));
+		static const FSlateRoundedBoxBrush Filled(FLinearColor::White, 5.0f);
+		static const FSlateRoundedBoxBrush Hollow(FLinearColor::Transparent, 5.0f, FLinearColor::White, 1.5f);
+		return bInHollow ? &Hollow : &Filled;
 	}
 
-	/** The key a row is about, for the log. */
-	FString RowName(const FDreamLocTranslateRowItem& InItem)
+	/** Reviewed green, to review yellow, stale blue, untranslated an empty ring: muted, as the rest of the editor. */
+	FLinearColor DotColor(EDreamLocReviewStatus InStatus)
 	{
-		return InItem.Row.Culture / InItem.Row.Namespace + TEXT(" ") + InItem.Row.Key;
-	}
-
-	/** A widget's last painted rectangle on the desktop (as a press's position is), for the log. */
-	FString RectOf(const TWeakPtr<SWidget>& InWidget)
-	{
-		const TSharedPtr<SWidget> Widget = InWidget.Pin();
-		if (!Widget.IsValid())
+		switch (InStatus)
 		{
-			return TEXT("(none)");
-		}
-		const FSlateRect Rect = Widget->GetTickSpaceGeometry().GetLayoutBoundingRect();
-		return FString::Printf(TEXT("[%.0f..%.0f x %.0f..%.0f]%s"), Rect.Left, Rect.Right, Rect.Top, Rect.Bottom, Widget->IsEnabled() ? TEXT("") : TEXT(" disabled"));
-	}
-
-	/** The last few widgets of a path, leaf last: what a click lands on. */
-	FString DescribeLeaf(const FWidgetPath& InPath)
-	{
-		TArray<FString> Parts;
-		for (int32 Index = FMath::Max(0, InPath.Widgets.Num() - 4); Index < InPath.Widgets.Num(); ++Index)
-		{
-			const TSharedRef<SWidget>& Widget = InPath.Widgets[Index].Widget;
-			const TSharedPtr<FTagMetaData> Tag = Widget->GetMetaData<FTagMetaData>();
-			Parts.Add(Widget->GetTypeAsString() + (Tag.IsValid() ? TEXT("(") + Tag->Tag.ToString() + TEXT(")") : FString()));
-		}
-		return Parts.Num() > 0 ? FString::Join(Parts, TEXT(" > ")) : FString(TEXT("(nothing)"));
-	}
-
-	FText StatusOf(const FDreamLocTranslateRowItem& InItem)
-	{
-		if (InItem.bBusy)
-		{
-			return LOCTEXT("StatusBusy", "translating again");
-		}
-		if (InItem.Review == TEXT("passed"))
-		{
-			return LOCTEXT("StatusPassed", "passed");
-		}
-		if (InItem.Review == TEXT("rejected"))
-		{
-			return LOCTEXT("StatusRejected", "rejected");
-		}
-		if (InItem.Review == TEXT("edited"))
-		{
-			return LOCTEXT("StatusEdited", "edited");
-		}
-		switch (InItem.Row.Status)
-		{
-		case EDreamLocTranslateStatus::Translated: return LOCTEXT("StatusTranslated", "translated");
-		case EDreamLocTranslateStatus::Failed: return LOCTEXT("StatusFailed", "failed");
-		default: return LOCTEXT("StatusSkipped", "skipped");
+		case EDreamLocReviewStatus::Done: return FLinearColor(0.36f, 0.62f, 0.38f);
+		case EDreamLocReviewStatus::Review: return FLinearColor(0.80f, 0.66f, 0.30f);
+		case EDreamLocReviewStatus::Stale: return FLinearColor(0.38f, 0.55f, 0.80f);
+		default: return FLinearColor(0.55f, 0.55f, 0.55f);
 		}
 	}
 
-	/** Which fields a profile of that type has. */
-	bool Shows(const FString& InType, FName InField)
+	FText FilterName(EDreamLocReviewFilter InFilter)
 	{
-		const bool bOpenAI = InType.Equals(TEXT("OpenAI"), ESearchCase::IgnoreCase);
-		const bool bKey = bOpenAI || InType.Equals(TEXT("DeepL"), ESearchCase::IgnoreCase) || InType.Equals(TEXT("Google"), ESearchCase::IgnoreCase);
-		const bool bTencent = InType.Equals(TEXT("Tencent"), ESearchCase::IgnoreCase);
-		const bool bApp = bTencent || InType.Equals(TEXT("Baidu"), ESearchCase::IgnoreCase) || InType.Equals(TEXT("Youdao"), ESearchCase::IgnoreCase);
-		if (InField == TEXT("Model") || InField == TEXT("Temperature") || InField == TEXT("JsonMode")) { return bOpenAI; }
-		if (InField == TEXT("ApiKey") || InField == TEXT("ApiKeyEnv")) { return bKey; }
-		if (InField == TEXT("AppId") || InField == TEXT("AppIdEnv") || InField == TEXT("Secret") || InField == TEXT("SecretEnv")) { return bApp; }
-		if (InField == TEXT("Region")) { return bTencent; }
-		return true;
+		switch (InFilter)
+		{
+		case EDreamLocReviewFilter::Untranslated: return LOCTEXT("FilterUntranslated", "Untranslated");
+		case EDreamLocReviewFilter::Stale: return LOCTEXT("FilterStale", "Stale");
+		case EDreamLocReviewFilter::Review: return LOCTEXT("FilterReview", "To review");
+		case EDreamLocReviewFilter::Problems: return LOCTEXT("FilterProblems", "Problems");
+		case EDreamLocReviewFilter::Done: return LOCTEXT("FilterDone", "Reviewed");
+		default: return LOCTEXT("FilterAll", "All");
+		}
 	}
 
-	FText AppIdLabel(const FString& InType)
+	const TCHAR* FilterTag(EDreamLocReviewFilter InFilter)
 	{
-		if (InType.Equals(TEXT("Tencent"), ESearchCase::IgnoreCase)) { return LOCTEXT("TencentSecretId", "SecretId"); }
-		if (InType.Equals(TEXT("Youdao"), ESearchCase::IgnoreCase)) { return LOCTEXT("YoudaoAppKey", "App key"); }
-		return LOCTEXT("BaiduAppId", "App ID");
+		switch (InFilter)
+		{
+		case EDreamLocReviewFilter::Untranslated: return TEXT("DreamLocTranslate.Filter.Untranslated");
+		case EDreamLocReviewFilter::Stale: return TEXT("DreamLocTranslate.Filter.Stale");
+		case EDreamLocReviewFilter::Review: return TEXT("DreamLocTranslate.Filter.Review");
+		case EDreamLocReviewFilter::Problems: return TEXT("DreamLocTranslate.Filter.Problems");
+		case EDreamLocReviewFilter::Done: return TEXT("DreamLocTranslate.Filter.Done");
+		default: return TEXT("DreamLocTranslate.Filter.All");
+		}
 	}
 
-	FText SecretLabel(const FString& InType)
-	{
-		if (InType.Equals(TEXT("Tencent"), ESearchCase::IgnoreCase)) { return LOCTEXT("TencentSecretKey", "SecretKey"); }
-		if (InType.Equals(TEXT("Youdao"), ESearchCase::IgnoreCase)) { return LOCTEXT("YoudaoAppSecret", "App secret"); }
-		return LOCTEXT("BaiduKey", "Key");
-	}
-
-	class SResultRow : public SMultiColumnTableRow<TSharedPtr<FDreamLocTranslateRowItem>>
+	class SReviewRow : public SMultiColumnTableRow<TSharedPtr<FDreamLocReviewEntry>>
 	{
 	public:
-		SLATE_BEGIN_ARGS(SResultRow) {}
-			SLATE_ARGUMENT(TSharedPtr<FDreamLocTranslateRowItem>, Item)
-			SLATE_ARGUMENT(TWeakPtr<SDreamLocTranslateWindow>, Window)
+		SLATE_BEGIN_ARGS(SReviewRow) {}
+			SLATE_ARGUMENT(TSharedPtr<FDreamLocReviewEntry>, Entry)
 		SLATE_END_ARGS()
 
 		void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwner)
 		{
-			Item = InArgs._Item;
-			Window = InArgs._Window;
-			SMultiColumnTableRow<TSharedPtr<FDreamLocTranslateRowItem>>::Construct(FSuperRowType::FArguments().Padding(FMargin(0.0f, 1.0f)), InOwner);
-		}
-
-		// What a press in the row meets, step by step, for `log LogDreamLocTranslate Verbose`: where it went down, which
-		// widgets are under it, where the row's buttons were last painted.
-		virtual FReply OnPreviewMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
-		{
-			if (UE_LOG_ACTIVE(LogDreamLocTranslate, Verbose))
-			{
-				const FVector2D At(MouseEvent.GetScreenSpacePosition());
-				const FWidgetPath Under = FSlateApplication::Get().LocateWindowUnderMouse(At, FSlateApplication::Get().GetInteractiveTopLevelWindows(), false,
-					MouseEvent.GetUserIndex());
-				UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: %s down at %.0f,%.0f (user %d%s), onto %s; Pass %s, Reject %s, Again %s"), *RowName(*Item),
-					*MouseEvent.GetEffectingButton().ToString(), At.X, At.Y, MouseEvent.GetUserIndex(), MouseEvent.IsTouchEvent() ? TEXT(", touch") : TEXT(""),
-					*DescribeLeaf(Under), *RectOf(PassButton), *RectOf(RejectButton), *RectOf(AgainButton));
-			}
-			return SMultiColumnTableRow<TSharedPtr<FDreamLocTranslateRowItem>>::OnPreviewMouseButtonDown(MyGeometry, MouseEvent);
-		}
-
-		virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
-		{
-			UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: the row itself took the press (no button did)"), *RowName(*Item));
-			return SMultiColumnTableRow<TSharedPtr<FDreamLocTranslateRowItem>>::OnMouseButtonDown(MyGeometry, MouseEvent);
+			Entry = InArgs._Entry;
+			SMultiColumnTableRow<TSharedPtr<FDreamLocReviewEntry>>::Construct(FSuperRowType::FArguments().Padding(FMargin(0.0f, 2.0f)), InOwner);
+			AddMetadata<FTagMetaData>(MakeShared<FTagMetaData>(*(TEXT("DreamLocTranslate.Row.") + Entry->Entry.Key)));
 		}
 
 		virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& InColumn) override
 		{
-			// Bound, not copied: a row translated again keeps its widgets and shows its new values.
-			auto Cell = [this](const TCHAR* InTag, TFunction<FString(const FDreamLocTranslateRow&)> InValue) -> TSharedRef<SWidget>
+			const FDreamLocReviewEntry& Shown = *Entry;
+			auto Padded = [](const TSharedRef<SWidget>& InContent) -> TSharedRef<SWidget>
 			{
-				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
-				return SNew(SBox).Padding(FMargin(4.0f, 2.0f)).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.AddMetaData<FTagMetaData>(FTagMetaData(InTag))
-					.Text_Lambda([Shown, InValue]() { return FText::FromString(OneLine(InValue(Shown->Row))); })
-					.ToolTipText_Lambda([Shown, InValue]() { return FText::FromString(InValue(Shown->Row)); })
-				];
+				return SNew(SBox).Padding(FMargin(4.0f, 1.0f)).VAlign(VAlign_Center)[InContent];
 			};
-			if (InColumn == ColumnFile) { return Cell(TEXT("DreamLocTranslate.File"), [](const FDreamLocTranslateRow& InRow) { return InRow.Culture / InRow.File; }); }
+			if (InColumn == ColumnStatus)
+			{
+				return SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)
+				[
+					SNew(SImage)
+					.Image(DotBrush(Shown.Status == EDreamLocReviewStatus::Untranslated))
+					.DesiredSizeOverride(FVector2D(10.0, 10.0))
+					.ColorAndOpacity(DotColor(Shown.Status))
+				];
+			}
 			if (InColumn == ColumnKey)
 			{
-				return Cell(TEXT("DreamLocTranslate.Key"), [](const FDreamLocTranslateRow& InRow)
-				{
-					return InRow.Namespace.IsEmpty() ? InRow.Key : InRow.Namespace + TEXT(" / ") + InRow.Key;
-				});
+				return Padded(SNew(STextBlock).Text(FText::FromString(Shown.Entry.Key)).ToolTipText(FText::FromString(Shown.Entry.Namespace + TEXT(" / ") + Shown.Entry.Key)));
 			}
-			if (InColumn == ColumnSource) { return Cell(TEXT("DreamLocTranslate.Source"), [](const FDreamLocTranslateRow& InRow) { return InRow.Source; }); }
-			if (InColumn == ColumnOld) { return Cell(TEXT("DreamLocTranslate.Old"), [](const FDreamLocTranslateRow& InRow) { return InRow.OldText; }); }
-			if (InColumn == ColumnBackend) { return Cell(TEXT("DreamLocTranslate.Backend"), [](const FDreamLocTranslateRow& InRow) { return InRow.Backend; }); }
-			if (InColumn == ColumnNew)
+			if (InColumn == ColumnSource)
 			{
-				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
-				// Multi-line: a translation's line breaks are its own, and a single-line box would drop them when it commits.
-				return SNew(SBox).Padding(FMargin(2.0f, 1.0f))
+				// A stale entry's source: what changed, on hover.
+				TSharedPtr<SToolTip> Tip;
+				if (Shown.Status == EDreamLocReviewStatus::Stale)
+				{
+					Tip = SNew(SToolTip)[SNew(SDreamLocChipText).MultiLine(true).Text(Shown.Entry.Source).OldText(Shown.Entry.Prev)];
+				}
+				else
+				{
+					Tip = SNew(SToolTip)[SNew(SDreamLocChipText).MultiLine(true).Text(Shown.Entry.Source)];
+				}
+				return Padded(SNew(SDreamLocChipText).AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.ListSource"))).Text(Shown.Entry.Source).ToolTip(Tip));
+			}
+			if (InColumn == ColumnTranslation)
+			{
+				return Padded(SNew(SDreamLocChipText).Text(Shown.Translation)
+					.ToolTip(SNew(SToolTip)[SNew(SDreamLocChipText).MultiLine(true).Text(Shown.Translation)]));
+			}
+			if (InColumn == ColumnReference)
+			{
+				return Padded(SNew(SDreamLocChipText).Text(Shown.Reference).ColorAndOpacity(FSlateColor::UseSubduedForeground()));
+			}
+			if (InColumn == ColumnProblems)
+			{
+				return SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)
 				[
-					SNew(SMultiLineEditableTextBox)
-					.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.New")))
-					.AutoWrapText(false)
-					.ModiferKeyForNewLine(EModifierKey::Shift)
-					.Text_Lambda([Shown]() { return FText::FromString(Shown->Row.NewText); })
-					.HintText_Lambda([Shown]() { return FText::FromString(OneLine(Shown->Row.RejectedText)); })
-					.IsEnabled_Lambda([Shown]() { return !Shown->bBusy; })
-					.OnTextCommitted_Lambda([this](const FText& InText, ETextCommit::Type InCommit)
-					{
-						// The box gives its lines back joined by the platform's line end (\r\n on Windows); a .dloc's are \n.
-						const FString Text = InText.ToString().Replace(TEXT("\r\n"), TEXT("\n"));
-						const TSharedPtr<SDreamLocTranslateWindow> Owner = Window.Pin();
-						if (InCommit != ETextCommit::OnCleared && Owner.IsValid() && !Text.Equals(Item->Row.NewText, ESearchCase::CaseSensitive))
-						{
-							Owner->EditRow(Item, Text);
-						}
-					})
+					SNew(SImage)
+					.Visibility(Shown.HasProblems() ? EVisibility::Visible : EVisibility::Hidden)
+					.Image(FAppStyle::GetBrush(TEXT("Icons.Warning")))
+					.ColorAndOpacity(FStyleColors::Warning)
+					.DesiredSizeOverride(FVector2D(14.0, 14.0))
+					.ToolTipText(FText::FromString(Shown.Problems.Replace(TEXT("; "), TEXT("\n"))))
 				];
-			}
-			if (InColumn == ColumnCheck)
-			{
-				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
-				auto Says = [Shown]()
-				{
-					const FDreamLocTranslateRow& Now = Shown->Row;
-					FString Detail = Now.Problems;
-					if (!Now.Reason.IsEmpty())
-					{
-						Detail = Detail.IsEmpty() ? Now.Reason : Now.Reason + TEXT(" -- ") + Detail;
-					}
-					return Detail.IsEmpty() ? StatusOf(*Shown) : FText::Format(LOCTEXT("StatusWithDetail", "{0}: {1}"), StatusOf(*Shown), FText::FromString(OneLine(Detail)));
-				};
-				return SNew(SBox).Padding(FMargin(4.0f, 2.0f)).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock)
-					.Text_Lambda(Says)
-					.ToolTipText_Lambda(Says)
-					.ColorAndOpacity_Lambda([Shown]()
-					{
-						if (Shown->Row.Status == EDreamLocTranslateStatus::Failed && Shown->Review.IsEmpty()) { return FSlateColor(FStyleColors::Error); }
-						if (Shown->Row.Status == EDreamLocTranslateStatus::Skipped && Shown->Review.IsEmpty()) { return FSlateColor::UseSubduedForeground(); }
-						if (!Shown->Row.Problems.IsEmpty()) { return FSlateColor(FStyleColors::Warning); }
-						return FSlateColor::UseForeground();
-					})
-				];
-			}
-			if (InColumn == ColumnActions)
-			{
-				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
-				const TWeakPtr<SDreamLocTranslateWindow> Owner = Window;
-				auto Button = [&Shown](const TCHAR* InTag, const TCHAR* InName, const FText& InLabel, const FText& InTip, TFunction<bool()> InCanDo, TFunction<void()> InDo,
-					TWeakPtr<SWidget>& OutButton) -> TSharedRef<SWidget>
-				{
-					const FString Name = InName;
-					// On press, and without taking focus: a press can then not be undone before its release -- by the window being
-					// activated (which releases every pointer capture), by focus moving, by the row being laid out again.
-					const TSharedRef<SButton> Made = SNew(SButton)
-						.AddMetaData<FTagMetaData>(FTagMetaData(InTag))
-						.Text(InLabel)
-						.ToolTipText(InTip)
-						.ContentPadding(FMargin(4.0f, 0.0f))
-						.ClickMethod(EButtonClickMethod::MouseDown)
-						.IsFocusable(false)
-						.IsEnabled_Lambda([Shown, InCanDo]() { return !Shown->bBusy && InCanDo(); })
-						.OnPressed_Lambda([Shown, Name]() { UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: %s pressed"), *RowName(*Shown), *Name); })
-						.OnClicked_Lambda([Shown, Name, InDo]()
-						{
-							UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: %s clicked"), *RowName(*Shown), *Name);
-							InDo();
-							return FReply::Handled();
-						});
-					OutButton = Made;
-					return Made;
-				};
-				return SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
-					[
-						Button(TEXT("DreamLocTranslate.Pass"), TEXT("Pass"), LOCTEXT("Pass", "Pass"), LOCTEXT("PassTip", "Mark the translation reviewed (state done)"),
-							[Shown]() { return !Shown->Row.NewText.IsEmpty() && Shown->Review != TEXT("passed"); },
-							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->PassRows({ Shown }); } },
-							PassButton)
-					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
-					[
-						Button(TEXT("DreamLocTranslate.Reject"), TEXT("Reject"), LOCTEXT("Reject", "Reject"), LOCTEXT("RejectTip", "Clear the translation"),
-							[Shown]() { return !Shown->Row.NewText.IsEmpty() && Shown->Review != TEXT("passed"); },
-							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RejectRows({ Shown }); } },
-							RejectButton)
-					]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
-					[
-						Button(TEXT("DreamLocTranslate.Again"), TEXT("Again"), LOCTEXT("Again", "Again"), LOCTEXT("AgainTip", "Translate this entry again"),
-							[Shown, Owner]() { const TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin(); return Pinned.IsValid() && !Pinned->IsRunning() && Shown->Review != TEXT("passed"); },
-							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RetranslateRow(Shown); } },
-							AgainButton)
-					];
 			}
 			return SNullWidget::NullWidget;
 		}
 
 	private:
-		TSharedPtr<FDreamLocTranslateRowItem> Item;
-		TWeakPtr<SDreamLocTranslateWindow> Window;
-		TWeakPtr<SWidget> PassButton;
-		TWeakPtr<SWidget> RejectButton;
-		TWeakPtr<SWidget> AgainButton;
+		TSharedPtr<FDreamLocReviewEntry> Entry;
 	};
 }
 
@@ -332,413 +190,456 @@ namespace DreamLocTranslateWindowLocal
 
 void SDreamLocTranslateWindow::Construct(const FArguments& InArgs)
 {
+	using namespace DreamLocTranslateWindowLocal;
 	DLocDirectory = InArgs._DLocDirectory.IsEmpty() ? FDreamLocTextSource::GetProjectDirectory() : InArgs._DLocDirectory;
 	OwnerDirectory = InArgs._OwnerDirectory.IsEmpty() ? FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()) : InArgs._OwnerDirectory;
-	for (const FString& Type : DreamLocTranslators::GetTypes())
-	{
-		TypeChoices.Add(MakeShared<FString>(Type));
-	}
 
 	ChildSlot
 	[
 		SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(8.0f, 8.0f, 8.0f, 4.0f).HAlign(HAlign_Left)
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.0f, 6.0f, 6.0f, 2.0f)[MakeToolbar()]
+		+ SVerticalBox::Slot().AutoHeight().Padding(6.0f, 2.0f)[MakeOverview()]
+		+ SVerticalBox::Slot().FillHeight(1.0f).Padding(6.0f, 2.0f)
 		[
-			SNew(SSegmentedControl<int32>)
-			.Value_Lambda([this]() { return Page; })
-			.OnValueChanged_Lambda([this](int32 InPage)
-			{
-				Page = InPage;
-				Pages->SetActiveWidgetIndex(InPage);
-			})
-			+ SSegmentedControl<int32>::Slot(0).Text(LOCTEXT("TranslatePage", "Translate"))
-			+ SSegmentedControl<int32>::Slot(1).Text(LOCTEXT("TranslatorsPage", "Translators"))
+			SNew(SSplitter)
+			+ SSplitter::Slot().Value(0.5f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SBox).WidthOverride(220.0f).Visibility_Lambda([this]() { return bShowFiles ? EVisibility::Visible : EVisibility::Collapsed; })
+					[
+						MakeFiles()
+					]
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.0f)[MakeList()]
+			]
+			+ SSplitter::Slot().Value(0.5f)
+			[
+				SAssignNew(Editor, SDreamLocTranslateEditor, SharedThis(this))
+			]
 		]
-		+ SVerticalBox::Slot().FillHeight(1.0f).Padding(8.0f, 0.0f, 8.0f, 8.0f)
+		+ SVerticalBox::Slot().AutoHeight().Padding(8.0f, 2.0f, 8.0f, 6.0f)
 		[
-			SAssignNew(Pages, SWidgetSwitcher)
-			+ SWidgetSwitcher::Slot()[MakeTranslatePage()]
-			+ SWidgetSwitcher::Slot()[MakeBackendsPage()]
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Text(LOCTEXT("Shortcuts", "Ctrl+Enter pass and next   Ctrl+Shift+Enter draft and next   Alt+Up / Alt+Down previous / next   Ctrl+1/2/3 a candidate   Ctrl+R translate again   Ctrl+Shift+F AI fix   F3 the missing placeholder"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Text_Lambda([this]() { return StatusText; })
+			]
 		]
 	];
 	Refresh();
+	WatchDirectory();
 }
 
 SDreamLocTranslateWindow::~SDreamLocTranslateWindow()
 {
+	UnwatchDirectory();
 	if (Running.IsValid())
 	{
 		Running->Cancel = true;
 	}
+	if (const TSharedPtr<SWindow> Dialog = PretranslateWindow.Pin())
+	{
+		FSlateApplication::Get().RequestDestroyWindow(Dialog.ToSharedRef());
+	}
 }
+
+TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
+{
+	using namespace DreamLocTranslateWindowLocal;
+	auto Choices = [this](TSharedPtr<SComboBox<TSharedPtr<FString>>>& OutCombo, TArray<TSharedPtr<FString>>* InChoices, TFunction<FText(const FString&)> InLabel,
+		TFunction<void(const FString&)> InChosen, TFunction<FString()> InCurrent, const TCHAR* InTag, const FText& InTip) -> TSharedRef<SWidget>
+	{
+		return SAssignNew(OutCombo, SComboBox<TSharedPtr<FString>>)
+			.AddMetaData<FTagMetaData>(FTagMetaData(InTag))
+			.ToolTipText(InTip)
+			.OptionsSource(InChoices)
+			.OnGenerateWidget_Lambda([InLabel](TSharedPtr<FString> InItem) -> TSharedRef<SWidget> { return SNew(STextBlock).Text(InLabel(InItem.IsValid() ? *InItem : FString())); })
+			.OnSelectionChanged_Lambda([InChosen](TSharedPtr<FString> InItem, ESelectInfo::Type InHow)
+			{
+				if (InItem.IsValid() && InHow != ESelectInfo::Direct)
+				{
+					InChosen(*InItem);
+				}
+			})
+			[
+				SNew(STextBlock).Text_Lambda([InLabel, InCurrent]() { return InLabel(InCurrent()); })
+			];
+	};
+
+	TSharedRef<SHorizontalBox> Filters = SNew(SHorizontalBox);
+	for (int32 Index = 0; Index < int32(EDreamLocReviewFilter::Count); ++Index)
+	{
+		const EDreamLocReviewFilter Each = EDreamLocReviewFilter(Index);
+		Filters->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 2.0f, 0.0f)
+		[
+			SNew(SCheckBox)
+			.AddMetaData<FTagMetaData>(FTagMetaData(FilterTag(Each)))
+			.Style(FAppStyle::Get(), TEXT("ToggleButtonCheckbox"))
+			.IsChecked_Lambda([this, Each]() { return Filter == Each ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([this, Each](ECheckBoxState) { SetFilter(Each); })
+			[
+				SNew(SBox).Padding(FMargin(6.0f, 2.0f))[SNew(STextBlock).Text_Lambda([this, Each]() { return FilterLabel(Each); })]
+			]
+		];
+	}
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			[
+				Choices(CultureCombo, &CultureChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoCulture", "(no culture)") : FText::FromString(InName); },
+					[this](const FString& InName) { SetCulture(InName); }, [this]() { return Culture; }, TEXT("DreamLocTranslate.Culture"),
+					LOCTEXT("CultureTip", "The culture to review"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)[Filters]
+			+ SHorizontalBox::Slot().FillWidth(1.0f).MaxWidth(260.0f).Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			[
+				SAssignNew(SearchBox, SSearchBox)
+				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Search")))
+				.HintText(LOCTEXT("SearchHint", "Key, source or translation"))
+				.OnTextChanged_Lambda([this](const FText& InText) { SetSearch(InText.ToString()); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			[
+				SNew(SCheckBox)
+				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Files")))
+				.Style(FAppStyle::Get(), TEXT("ToggleButtonCheckbox"))
+				.ToolTipText(LOCTEXT("FilesTip", "Show the files, to look at one alone"))
+				.IsChecked_Lambda([this]() { return bShowFiles ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([this](ECheckBoxState InState) { bShowFiles = InState == ECheckBoxState::Checked; })
+				[
+					SNew(SBox).Padding(FMargin(6.0f, 2.0f))[SNew(STextBlock).Text(LOCTEXT("FilesButton", "Files"))]
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			[
+				Choices(ReferenceCombo, &ReferenceChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoReference", "No reference") : FText::Format(LOCTEXT("Reference", "Reference: {0}"), FText::FromString(InName)); },
+					[this](const FString& InName) { SetReferenceCulture(InName); }, [this]() { return ReferenceCulture; }, TEXT("DreamLocTranslate.ReferenceCulture"),
+					LOCTEXT("ReferenceTip", "Another culture's translations, beside this one's"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			[
+				Choices(ProfileCombo, &ProfileChoices, [this](const FString& InName) { return ProfileLabel(InName); },
+					[this](const FString& InName) { SetProfile(InName); }, [this]() { return Profile; }, TEXT("DreamLocTranslate.Profile"),
+					LOCTEXT("ProfileTip", "The translator for this window's actions"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton)
+				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Pretranslate")))
+				.Text(LOCTEXT("Pretranslate", "AI pre-translate..."))
+				.ToolTipText(LOCTEXT("PretranslateTip", "Translate many entries at once; what comes back waits here for review"))
+				.OnClicked_Lambda([this]() { OpenPretranslate(); return FReply::Handled(); })
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(0.35f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+			[
+				SNew(SProgressBar)
+				.Percent_Lambda([this]() -> TOptional<float>
+				{
+					const FDreamLocReviewProgress Progress = Model.GetProgress(File);
+					return Progress.Total() > 0 ? float(Progress.Done) / float(Progress.Total()) : 0.0f;
+				})
+			]
+			+ SHorizontalBox::Slot().FillWidth(0.65f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).ColorAndOpacity(FSlateColor::UseSubduedForeground()).Text_Lambda([this]() { return ProgressText(); })
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
+			[
+				SNew(SHorizontalBox).Visibility_Lambda([this]() { return IsRunning() ? EVisibility::Visible : EVisibility::Collapsed; })
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 4.0f, 0.0f)
+				[
+					SNew(SBox).WidthOverride(90.0f)[SNew(SProgressBar).Percent_Lambda([this]() -> TOptional<float> { return GetRunFraction(); })]
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton).Text(LOCTEXT("CancelRun", "Cancel")).OnClicked_Lambda([this]() { CancelRun(); return FReply::Handled(); })
+				]
+			]
+		];
+}
+
+TSharedRef<SWidget> SDreamLocTranslateWindow::MakeList()
+{
+	using namespace DreamLocTranslateWindowLocal;
+	SAssignNew(Header, SHeaderRow)
+		+ SHeaderRow::Column(ColumnStatus).DefaultLabel(FText::GetEmpty()).FixedWidth(22.0f)
+		+ SHeaderRow::Column(ColumnKey).DefaultLabel(LOCTEXT("ColumnKey", "Key")).FillWidth(0.18f)
+		+ SHeaderRow::Column(ColumnSource).DefaultLabel(LOCTEXT("ColumnSource", "Source")).FillWidth(0.34f)
+		+ SHeaderRow::Column(ColumnTranslation).DefaultLabel(LOCTEXT("ColumnTranslation", "Translation")).FillWidth(0.34f)
+		+ SHeaderRow::Column(ColumnReference).DefaultLabel(LOCTEXT("ColumnReference", "Reference")).FillWidth(0.24f)
+		+ SHeaderRow::Column(ColumnProblems).DefaultLabel(FText::GetEmpty()).FixedWidth(26.0f);
+	Header->SetShowGeneratedColumn(ColumnReference, false);
+	return SAssignNew(List, SListView<TSharedPtr<FDreamLocReviewEntry>>)
+		.ListItemsSource(&Shown)
+		.SelectionMode(ESelectionMode::Multi)
+		.HeaderRow(Header)
+		.OnGenerateRow(this, &SDreamLocTranslateWindow::MakeRow)
+		.OnContextMenuOpening(this, &SDreamLocTranslateWindow::MakeContextMenu)
+		.OnSelectionChanged_Lambda([this](TSharedPtr<FDreamLocReviewEntry> InEntry, ESelectInfo::Type)
+		{
+			if (bSyncingSelection || !InEntry.IsValid() || InEntry == Current)
+			{
+				return;
+			}
+			// A change to the entry being left is kept as a draft first: the files are read again, so find the entry anew.
+			const FString Namespace = InEntry->Entry.Namespace;
+			const FString Key = InEntry->Entry.Key;
+			KeepEdit();
+			ShowEntry(Model.Find(Namespace, Key));
+		})
+		.OnMouseButtonDoubleClick_Lambda([this](TSharedPtr<FDreamLocReviewEntry> InEntry) { OpenInFile(InEntry); });
+}
+
+TSharedRef<ITableRow> SDreamLocTranslateWindow::MakeRow(TSharedPtr<FDreamLocReviewEntry> InEntry, const TSharedRef<STableViewBase>& InOwner)
+{
+	return SNew(DreamLocTranslateWindowLocal::SReviewRow, InOwner).Entry(InEntry);
+}
+
+TSharedRef<SWidget> SDreamLocTranslateWindow::MakeFiles()
+{
+	return SNew(SBorder).BorderImage(FAppStyle::GetBrush(TEXT("ToolPanel.GroupBorder")))
+	[
+		SAssignNew(FileTree, STreeView<TSharedPtr<FDreamLocReviewFileNode>>)
+		.TreeItemsSource(&FileRoots)
+		.SelectionMode(ESelectionMode::Single)
+		.OnGetChildren_Lambda([](TSharedPtr<FDreamLocReviewFileNode> InNode, TArray<TSharedPtr<FDreamLocReviewFileNode>>& OutChildren) { OutChildren = InNode->Children; })
+		.OnGenerateRow_Lambda([this](TSharedPtr<FDreamLocReviewFileNode> InNode, const TSharedRef<STableViewBase>& InOwner) -> TSharedRef<ITableRow>
+		{
+			const FDreamLocReviewProgress Progress = Model.GetProgress(InNode->Path);
+			return SNew(STableRow<TSharedPtr<FDreamLocReviewFileNode>>, InOwner)
+				.AddMetaData<FTagMetaData>(FTagMetaData(*(TEXT("DreamLocTranslate.File.") + (InNode->Path.IsEmpty() ? FString(TEXT("All")) : InNode->Path))))
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().FillWidth(1.0f)[SNew(STextBlock).Text(FText::FromString(InNode->Name))]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(6.0f, 0.0f, 2.0f, 0.0f)
+					[
+						SNew(STextBlock).ColorAndOpacity(FSlateColor::UseSubduedForeground())
+						.Text(FText::Format(LOCTEXT("FileProgress", "{0}/{1}"), Progress.Done, Progress.Total()))
+					]
+				];
+		})
+		.OnSelectionChanged_Lambda([this](TSharedPtr<FDreamLocReviewFileNode> InNode, ESelectInfo::Type InHow)
+		{
+			if (InNode.IsValid() && InHow != ESelectInfo::Direct)
+			{
+				SetFile(InNode->Path);
+			}
+		})
+	];
+}
+
+TSharedPtr<SWidget> SDreamLocTranslateWindow::MakeContextMenu()
+{
+	const TArray<TSharedPtr<FDreamLocReviewEntry>> Selected = GetSelectedEntries();
+	if (Selected.IsEmpty())
+	{
+		return nullptr;
+	}
+	const bool bAnyTranslated = Selected.ContainsByPredicate([](const TSharedPtr<FDreamLocReviewEntry>& InEntry) { return !InEntry->Translation.IsEmpty(); });
+	FMenuBuilder Menu(/*bInShouldCloseWindowAfterMenuSelection*/ true, nullptr);
+	Menu.AddMenuEntry(LOCTEXT("MenuPass", "Pass"), LOCTEXT("MenuPassTip", "Mark their translations reviewed (state done)"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this, Selected]() { PassEntries(Selected); }), FCanExecuteAction::CreateLambda([bAnyTranslated]() { return bAnyTranslated; })),
+		NAME_None, EUserInterfaceActionType::Button, TEXT("DreamLocTranslate.MenuPass"));
+	Menu.AddMenuEntry(LOCTEXT("MenuReject", "Reject"), LOCTEXT("MenuRejectTip", "Take their translations out"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([this, Selected]() { RejectEntries(Selected); }), FCanExecuteAction::CreateLambda([bAnyTranslated]() { return bAnyTranslated; })),
+		NAME_None, EUserInterfaceActionType::Button, TEXT("DreamLocTranslate.MenuReject"));
+	for (const EDreamLocTranslatorKind Kind : { EDreamLocTranslatorKind::LargeModel, EDreamLocTranslatorKind::Machine })
+	{
+		const bool bLarge = Kind == EDreamLocTranslatorKind::LargeModel;
+		Menu.AddSubMenu(bLarge ? LOCTEXT("MenuLarge", "Translate with a large model") : LOCTEXT("MenuMachine", "Translate with a machine translator"), FText::GetEmpty(),
+			FNewMenuDelegate::CreateLambda([this, Selected, Kind](FMenuBuilder& InSub)
+			{
+				for (const FDreamLocTranslateProfile& Each : Profiles)
+				{
+					if (Each.GetKind() == Kind)
+					{
+						const FString Name = Each.Name;
+						InSub.AddMenuEntry(ProfileLabel(Name), FText::GetEmpty(), FSlateIcon(),
+							FUIAction(FExecuteAction::CreateLambda([this, Selected, Name]() { TranslateEntries(Selected, Name); }), FCanExecuteAction::CreateLambda([this]() { return !IsRunning(); })),
+							NAME_None, EUserInterfaceActionType::Button, *(TEXT("DreamLocTranslate.MenuTranslate.") + Name));
+					}
+				}
+			}));
+	}
+	Menu.AddMenuEntry(LOCTEXT("MenuCopy", "Copy key"), LOCTEXT("MenuCopyTip", "Their namespaces and keys, a line each"), FSlateIcon(),
+		FUIAction(FExecuteAction::CreateLambda([Selected]()
+		{
+			TArray<FString> Lines;
+			for (const TSharedPtr<FDreamLocReviewEntry>& Entry : Selected)
+			{
+				Lines.Add(Entry->Entry.Namespace + TEXT(" / ") + Entry->Entry.Key);
+			}
+			FPlatformApplicationMisc::ClipboardCopy(*FString::Join(Lines, TEXT("\n")));
+		})), NAME_None, EUserInterfaceActionType::Button, TEXT("DreamLocTranslate.MenuCopy"));
+	return Menu.MakeWidget();
+}
+
+// ---------------------------------------------------------------------------------------------------------- what is shown
 
 void SDreamLocTranslateWindow::SetDirectories(const FString& InDLocDirectory, const FString& InOwnerDirectory)
 {
+	UnwatchDirectory();
 	DLocDirectory = InDLocDirectory;
 	OwnerDirectory = InOwnerDirectory;
-	RowItems.Reset();
-	if (ResultsList.IsValid())
-	{
-		ResultsList->RequestListRefresh();
-	}
+	Culture.Reset();
+	Current.Reset();
 	Refresh();
+	WatchDirectory();
 }
 
 void SDreamLocTranslateWindow::Refresh()
 {
 	Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
 	TArray<FString> Warnings;
-	const TArray<FDreamLocTranslateProfile> Loaded = DreamLocTranslateConfig::LoadProfiles(&Warnings);
-	const FString SelectedName = SelectedProfile.IsValid() ? SelectedProfile->Name : FString();
-	ProfileItems.Reset();
-	SelectedProfile.Reset();
-	for (const FDreamLocTranslateProfile& Profile : Loaded)
+	Profiles = DreamLocTranslateConfig::LoadProfiles(&Warnings);
+	if (!Settings.TargetCultures.Contains(Culture))
 	{
-		ProfileItems.Add(MakeShared<FDreamLocTranslateProfile>(Profile));
-		if (Profile.Name == SelectedName)
-		{
-			SelectedProfile = ProfileItems.Last();
-		}
+		Culture = Settings.TargetCultures.Num() > 0 ? Settings.TargetCultures[0] : FString();
 	}
-	if (!SelectedProfile.IsValid() && ProfileItems.Num() > 0)
+	if (!Settings.TargetCultures.Contains(ReferenceCulture) || ReferenceCulture == Culture)
 	{
-		SelectedProfile = ProfileItems[0];
+		ReferenceCulture.Reset();
 	}
-	ProfilesText = Warnings.Num() > 0 ? FText::FromString(FString::Join(Warnings, TEXT("\n")))
-		: FText::Format(LOCTEXT("ProfilesRead", "{0} {0}|plural(one=profile,other=profiles) in {1}"), ProfileItems.Num(),
-			FText::FromString(DreamLocTranslateConfig::GetUserConfigPath()));
-	if (ProfileList.IsValid())
+	if (!Profile.IsEmpty() && !DreamLocTranslateConfig::FindProfile(Profiles, Profile))
 	{
-		ProfileList->RequestListRefresh();
-		if (SelectedProfile.IsValid())
-		{
-			ProfileList->SetSelection(SelectedProfile, ESelectInfo::Direct);
-		}
+		Profile.Reset();
 	}
-
-	AllCultures = Settings.TargetCultures;
-	TSet<FString> Kept;
-	for (const FString& Culture : AllCultures)
+	CultureChoices.Reset();
+	ReferenceChoices.Reset();
+	ReferenceChoices.Add(MakeShared<FString>());
+	for (const FString& Each : Settings.TargetCultures)
 	{
-		if (CheckedCultures.Contains(Culture))
-		{
-			Kept.Add(Culture);
-		}
+		CultureChoices.Add(MakeShared<FString>(Each));
+		ReferenceChoices.Add(MakeShared<FString>(Each));
 	}
-	if (Kept.Num() == 0)
-	{
-		Kept.Append(AllCultures);
-	}
-	CheckedCultures = MoveTemp(Kept);
-	RebuildCultures();
-	RebuildProfileChoices();
-	RebuildFileTree();
-	LoadProjectSettings();
-}
-
-void SDreamLocTranslateWindow::RebuildCultures()
-{
-	if (!CultureBox.IsValid())
-	{
-		return;
-	}
-	CultureBox->ClearChildren();
-	if (AllCultures.IsEmpty())
-	{
-		CultureBox->AddSlot()[SNew(STextBlock).Text(LOCTEXT("NoCultures", "dloc.ini names no TargetCultures"))];
-	}
-	for (const FString& Culture : AllCultures)
-	{
-		CultureBox->AddSlot().Padding(0.0f, 0.0f, 12.0f, 0.0f)
-		[
-			SNew(SCheckBox)
-			.IsChecked_Lambda([this, Culture]() { return CheckedCultures.Contains(Culture) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-			.OnCheckStateChanged_Lambda([this, Culture](ECheckBoxState InState)
-			{
-				if (InState == ECheckBoxState::Checked)
-				{
-					CheckedCultures.Add(Culture);
-				}
-				else
-				{
-					CheckedCultures.Remove(Culture);
-				}
-			})
-			[
-				SNew(STextBlock).Text(FText::FromString(Culture))
-			]
-		];
-	}
-}
-
-void SDreamLocTranslateWindow::RebuildProfileChoices()
-{
-	const FString Previous = ChosenProfile.IsValid() ? *ChosenProfile : FString();
 	ProfileChoices.Reset();
 	ProfileChoices.Add(MakeShared<FString>());
-	ChosenProfile = ProfileChoices[0];
-	for (const TSharedPtr<FDreamLocTranslateProfile>& Profile : ProfileItems)
+	for (const FDreamLocTranslateProfile& Each : Profiles)
 	{
-		ProfileChoices.Add(MakeShared<FString>(Profile->Name));
-		if (Profile->Name == Previous)
+		ProfileChoices.Add(MakeShared<FString>(Each.Name));
+	}
+	for (const TSharedPtr<SComboBox<TSharedPtr<FString>>>& Combo : { CultureCombo, ReferenceCombo, ProfileCombo })
+	{
+		if (Combo.IsValid())
 		{
-			ChosenProfile = ProfileChoices.Last();
+			Combo->RefreshOptions();
 		}
 	}
-	if (ProfileCombo.IsValid())
+	StatusText = Warnings.Num() > 0 ? FText::FromString(FString::Join(Warnings, TEXT("; "))) : FText::GetEmpty();
+	Model.Load(DLocDirectory, OwnerDirectory, Culture, ReferenceCulture);
+	if (Header.IsValid())
 	{
-		ProfileCombo->RefreshOptions();
-		ProfileCombo->SetSelectedItem(ChosenProfile);
+		Header->SetShowGeneratedColumn(DreamLocTranslateWindowLocal::ColumnReference, !ReferenceCulture.IsEmpty());
 	}
+	const TSharedPtr<FDreamLocReviewEntry> Was = Current;
+	RebuildShown();
+	RebuildFiles();
+	RebuildOverview();
+	ShowEntry(Was.IsValid() ? Model.Find(Was->Entry.Namespace, Was->Entry.Key) : nullptr);
 }
 
-FText SDreamLocTranslateWindow::ProfileLabel(const FString& InName) const
+void SDreamLocTranslateWindow::Reload()
 {
-	if (InName.IsEmpty())
+	const FString Namespace = Current.IsValid() ? Current->Entry.Namespace : FString();
+	const FString Key = Current.IsValid() ? Current->Entry.Key : FString();
+	const bool bChanged = Editor.IsValid() && Editor->IsChanged();
+	const FString Typed = Editor.IsValid() ? Editor->GetText() : FString();
+	TSet<FString> Selected;
+	for (const TSharedPtr<FDreamLocReviewEntry>& Entry : GetSelectedEntries())
 	{
-		return LOCTEXT("EachCulturesOwn", "Each culture's own ([Translate] in dloc.ini)");
+		Selected.Add(Entry->GetId());
 	}
-	for (const TSharedPtr<FDreamLocTranslateProfile>& Profile : ProfileItems)
+	const uint32 Was = Model.GetSignature();
+	Model.Reload();
+	const bool bSame = Model.GetSignature() == Was;
+	RebuildShown();
+	if (!bSame)
 	{
-		if (Profile->Name == InName)
-		{
-			return FText::Format(LOCTEXT("ProfileLabel", "{0} ({1}, {2})"), FText::FromString(Profile->Name), FText::FromString(Profile->Type),
-				Profile->IsLocal() ? LOCTEXT("Local", "local") : LOCTEXT("Cloud", "cloud"));
-		}
+		RebuildFiles();
 	}
-	return FText::FromString(InName);
-}
-
-// ---------------------------------------------------------------------------------------------------------- the translate page
-
-TSharedRef<SWidget> SDreamLocTranslateWindow::MakeTranslatePage()
-{
-	using namespace DreamLocTranslateWindowLocal;
-	auto Label = [](const FText& InText) -> TSharedRef<SWidget>
+	RebuildOverview();
+	const TSharedPtr<FDreamLocReviewEntry> Again = Current.IsValid() ? Model.Find(Namespace, Key) : nullptr;
+	if (bSame && Editor.IsValid())
 	{
-		return SNew(SBox).MinDesiredWidth(90.0f).VAlign(VAlign_Center)[SNew(STextBlock).Text(InText)];
-	};
-	auto Toggle = [](const FText& InText, bool* InFlag) -> TSharedRef<SWidget>
-	{
-		return SNew(SCheckBox)
-			.IsChecked_Lambda([InFlag]() { return *InFlag ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-			.OnCheckStateChanged_Lambda([InFlag](ECheckBoxState InState) { *InFlag = InState == ECheckBoxState::Checked; })
-			[
-				SNew(STextBlock).Text(InText)
-			];
-	};
-
-	TSharedRef<SHeaderRow> Header = SNew(SHeaderRow)
-		+ SHeaderRow::Column(ColumnFile).DefaultLabel(LOCTEXT("ColumnFile", "File")).FillWidth(0.13f)
-		+ SHeaderRow::Column(ColumnKey).DefaultLabel(LOCTEXT("ColumnKey", "Key")).FillWidth(0.13f)
-		+ SHeaderRow::Column(ColumnSource).DefaultLabel(LOCTEXT("ColumnSource", "Source")).FillWidth(0.2f)
-		+ SHeaderRow::Column(ColumnOld).DefaultLabel(LOCTEXT("ColumnOld", "Old translation")).FillWidth(0.15f)
-		+ SHeaderRow::Column(ColumnNew).DefaultLabel(LOCTEXT("ColumnNew", "New translation")).FillWidth(0.22f)
-		+ SHeaderRow::Column(ColumnCheck).DefaultLabel(LOCTEXT("ColumnCheck", "Checks")).FillWidth(0.17f)
-		// Fixed: a row lays its fill columns out by their share alone, so a short name in a narrow window would be cut.
-		+ SHeaderRow::Column(ColumnBackend).DefaultLabel(LOCTEXT("ColumnBackend", "Translator")).FixedWidth(120.0f)
-		+ SHeaderRow::Column(ColumnActions).DefaultLabel(FText::GetEmpty()).FixedWidth(224.0f);
-
-	return SNew(SSplitter)
-		.Orientation(Orient_Vertical)
-		+ SSplitter::Slot().Value(0.38f)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth()[Label(LOCTEXT("Cultures", "Cultures"))]
-				+ SHorizontalBox::Slot().FillWidth(1.0f)[SAssignNew(CultureBox, SWrapBox).UseAllottedSize(true)]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth()[Label(LOCTEXT("Entries", "Entries"))]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 12.0f, 0.0f)[Toggle(LOCTEXT("Untranslated", "Untranslated"), &bIncludeUntranslated)]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 12.0f, 0.0f)[Toggle(LOCTEXT("Stale", "Stale (source changed)"), &bIncludeStale)]
-				+ SHorizontalBox::Slot().AutoWidth()[Toggle(LOCTEXT("Machine", "Machine translated"), &bIncludeMachine)]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth()[Label(LOCTEXT("Translator", "Translator"))]
-				+ SHorizontalBox::Slot().AutoWidth()
-				[
-					SAssignNew(ProfileCombo, SComboBox<TSharedPtr<FString>>)
-					.OptionsSource(&ProfileChoices)
-					.OnGenerateWidget_Lambda([this](TSharedPtr<FString> InItem) -> TSharedRef<SWidget>
-					{
-						return SNew(STextBlock).Text(ProfileLabel(InItem.IsValid() ? *InItem : FString()));
-					})
-					.OnSelectionChanged_Lambda([this](TSharedPtr<FString> InItem, ESelectInfo::Type)
-					{
-						if (InItem.IsValid())
-						{
-							ChosenProfile = InItem;
-						}
-					})
-					[
-						SNew(STextBlock).Text_Lambda([this]() { return ProfileLabel(ChosenProfile.IsValid() ? *ChosenProfile : FString()); })
-					]
-				]
-			]
-			+ SVerticalBox::Slot().FillHeight(1.0f).Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth()[SNew(SBox).MinDesiredWidth(90.0f).VAlign(VAlign_Top)[SNew(STextBlock).Text(LOCTEXT("Files", "Files"))]]
-				+ SHorizontalBox::Slot().FillWidth(1.0f)
-				[
-					SNew(SBorder).BorderImage(FAppStyle::GetBrush(TEXT("ToolPanel.GroupBorder")))
-					[
-						SAssignNew(FileTree, STreeView<TSharedPtr<FDreamLocTranslateFileNode>>)
-						.TreeItemsSource(&FileRoots)
-						.SelectionMode(ESelectionMode::None)
-						.OnGenerateRow(this, &SDreamLocTranslateWindow::MakeFileWidget)
-						.OnGetChildren_Lambda([](TSharedPtr<FDreamLocTranslateFileNode> InNode, TArray<TSharedPtr<FDreamLocTranslateFileNode>>& OutChildren)
-						{
-							OutChildren = InNode->Children;
-						})
-					]
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-				[
-					SNew(SButton).Text(LOCTEXT("Estimate", "Estimate")).IsEnabled_Lambda([this]() { return !IsRunning(); })
-					.OnClicked_Lambda([this]() { RunEstimate(); return FReply::Handled(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-				[
-					SNew(SButton).Text(LOCTEXT("TranslateButton", "Translate")).IsEnabled_Lambda([this]() { return !IsRunning(); })
-					.OnClicked(this, &SDreamLocTranslateWindow::OnTranslateClicked)
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
-				[
-					SNew(SButton).Text(LOCTEXT("Cancel", "Cancel")).IsEnabled_Lambda([this]() { return IsRunning(); })
-					.OnClicked_Lambda([this]() { CancelTranslate(); return FReply::Handled(); })
-				]
-				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text_Lambda([this]() { return EstimateText; }).AutoWrapText(true)
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(0.3f).VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
-				[
-					SNew(SProgressBar).Percent(this, &SDreamLocTranslateWindow::GetProgressFraction)
-				]
-				+ SHorizontalBox::Slot().FillWidth(0.7f).VAlign(VAlign_Center)
-				[
-					SNew(STextBlock).Text(this, &SDreamLocTranslateWindow::GetProgressText).AutoWrapText(true)
-				]
-			]
-		]
-		+ SSplitter::Slot().Value(0.62f)
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-				[
-					SNew(SButton).Text(LOCTEXT("PassSelected", "Pass selected"))
-					.ToolTipText(LOCTEXT("PassSelectedTip", "Mark the selected rows' translations reviewed (state done)"))
-					.OnClicked_Lambda([this]() { PassRows(ResultsList->GetSelectedItems()); return FReply::Handled(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 12.0f, 0.0f)
-				[
-					SNew(SButton).Text(LOCTEXT("RejectSelected", "Reject selected"))
-					.ToolTipText(LOCTEXT("RejectSelectedTip", "Clear the selected rows' translations"))
-					.OnClicked_Lambda([this]() { RejectRows(ResultsList->GetSelectedItems()); return FReply::Handled(); })
-				]
-				+ SHorizontalBox::Slot().AutoWidth()
-				[
-					SNew(SButton).Text(LOCTEXT("LoadForReview", "Load machine translations"))
-					.ToolTipText(LOCTEXT("LoadForReviewTip", "Show the chosen cultures' and files' machine translations, to review them without a new run"))
-					.IsEnabled_Lambda([this]() { return !IsRunning(); })
-					.OnClicked_Lambda([this]() { LoadForReview(); return FReply::Handled(); })
-				]
-			]
-			+ SVerticalBox::Slot().FillHeight(1.0f)
-			[
-				SAssignNew(ResultsList, SListView<TSharedPtr<FDreamLocTranslateRowItem>>)
-				.ListItemsSource(&RowItems)
-				.SelectionMode(ESelectionMode::Multi)
-				.OnGenerateRow(this, &SDreamLocTranslateWindow::MakeRowWidget)
-				.OnMouseButtonDoubleClick_Lambda([this](TSharedPtr<FDreamLocTranslateRowItem> InItem) { OpenRowInEditor(InItem); })
-				.HeaderRow(Header)
-			]
-		];
-}
-
-TSharedRef<ITableRow> SDreamLocTranslateWindow::MakeRowWidget(TSharedPtr<FDreamLocTranslateRowItem> InItem, const TSharedRef<STableViewBase>& InOwner)
-{
-	return SNew(DreamLocTranslateWindowLocal::SResultRow, InOwner).Item(InItem).Window(SharedThis(this));
-}
-
-TSharedRef<ITableRow> SDreamLocTranslateWindow::MakeFileWidget(TSharedPtr<FDreamLocTranslateFileNode> InNode, const TSharedRef<STableViewBase>& InOwner)
-{
-	return SNew(STableRow<TSharedPtr<FDreamLocTranslateFileNode>>, InOwner)
-	[
-		SNew(SCheckBox)
-		.IsChecked_Lambda([InNode]() { return InNode->Checked; })
-		.OnCheckStateChanged_Lambda([this, InNode](ECheckBoxState InState)
+		// The same entries (a file this window wrote, read again when the folder says it changed): the editor and the
+		// list left as they are -- what is typed, the cursor, the undo, the rows selected.
+		Current = Again;
+		Editor->Rebind(Again);
+		if (List.IsValid())
 		{
-			SetNodeChecked(InNode, InState == ECheckBoxState::Unchecked ? ECheckBoxState::Unchecked : ECheckBoxState::Checked);
-		})
-		[
-			SNew(STextBlock).Text(FText::FromString(InNode->Name))
-		]
-	];
-}
-
-void SDreamLocTranslateWindow::RebuildFileTree()
-{
-	FileRoots.Reset();
-	TSet<FString> Stems;
-	for (const TPair<FString, TMap<FString, FString>>& Culture : DreamLocSync::ReadFiles(DLocDirectory, AllCultures))
-	{
-		for (const TPair<FString, FString>& File : Culture.Value)
-		{
-			if (!FPaths::GetCleanFilename(File.Key).StartsWith(TEXT("_")))
+			TGuardValue<bool> Guard(bSyncingSelection, true);
+			List->ClearSelection();
+			for (const TSharedPtr<FDreamLocReviewEntry>& Entry : Shown)
 			{
-				Stems.Add(FPaths::GetBaseFilename(File.Key, /*bRemovePath*/ false));
+				if (Selected.Contains(Entry->GetId()))
+				{
+					List->SetItemSelection(Entry, true, ESelectInfo::Direct);
+				}
 			}
 		}
+		return;
 	}
-	TArray<FString> Sorted = Stems.Array();
-	Sorted.Sort();
-	TMap<FString, TSharedPtr<FDreamLocTranslateFileNode>> Folders;
-	for (const FString& Stem : Sorted)
+	ShowEntry(Again);
+	if (bChanged && Current.IsValid())
+	{
+		// What was being typed stays: the file changing underneath does not take it away.
+		Editor->SetText(Typed);
+	}
+}
+
+void SDreamLocTranslateWindow::RebuildShown()
+{
+	Shown = Model.Filter(Filter, Search, File);
+	if (List.IsValid())
+	{
+		List->RequestListRefresh();
+	}
+}
+
+void SDreamLocTranslateWindow::RebuildFiles()
+{
+	FileRoots.Reset();
+	const TSharedPtr<FDreamLocReviewFileNode> All = MakeShared<FDreamLocReviewFileNode>();
+	All->Name = LOCTEXT("AllFiles", "All files").ToString();
+	FileRoots.Add(All);
+	TMap<FString, TSharedPtr<FDreamLocReviewFileNode>> Folders;
+	for (const FString& Each : Model.GetFiles())
 	{
 		TArray<FString> Parts;
-		Stem.ParseIntoArray(Parts, TEXT("/"));
-		TSharedPtr<FDreamLocTranslateFileNode> Parent;
+		Each.ParseIntoArray(Parts, TEXT("/"));
+		TSharedPtr<FDreamLocReviewFileNode> Parent = All;
 		FString Path;
 		for (int32 Index = 0; Index < Parts.Num(); ++Index)
 		{
 			const bool bFile = Index == Parts.Num() - 1;
-			Path += Parts[Index];
-			TSharedPtr<FDreamLocTranslateFileNode> Node;
+			Path += Parts[Index] + (bFile ? TEXT("") : TEXT("/"));
 			if (!bFile)
 			{
-				Path += TEXT("/");
-				if (const TSharedPtr<FDreamLocTranslateFileNode>* Found = Folders.Find(Path))
+				if (const TSharedPtr<FDreamLocReviewFileNode>* Found = Folders.Find(Path))
 				{
 					Parent = *Found;
 					continue;
 				}
 			}
-			Node = MakeShared<FDreamLocTranslateFileNode>();
+			const TSharedPtr<FDreamLocReviewFileNode> Node = MakeShared<FDreamLocReviewFileNode>();
 			Node->Name = Parts[Index];
 			Node->Path = Path;
-			Node->bFolder = !bFile;
-			Node->Parent = Parent;
-			(Parent.IsValid() ? Parent->Children : FileRoots).Add(Node);
+			Parent->Children.Add(Node);
 			if (!bFile)
 			{
 				Folders.Add(Path, Node);
@@ -746,221 +647,443 @@ void SDreamLocTranslateWindow::RebuildFileTree()
 			}
 		}
 	}
-	// Folders before files, as a file browser shows them.
-	TFunction<void(TArray<TSharedPtr<FDreamLocTranslateFileNode>>&)> Order = [&Order](TArray<TSharedPtr<FDreamLocTranslateFileNode>>& InNodes)
-	{
-		InNodes.StableSort([](const TSharedPtr<FDreamLocTranslateFileNode>& A, const TSharedPtr<FDreamLocTranslateFileNode>& B) { return A->bFolder && !B->bFolder; });
-		for (TSharedPtr<FDreamLocTranslateFileNode>& Node : InNodes)
-		{
-			Order(Node->Children);
-		}
-	};
-	Order(FileRoots);
 	if (FileTree.IsValid())
 	{
 		FileTree->RequestTreeRefresh();
-		for (const TPair<FString, TSharedPtr<FDreamLocTranslateFileNode>>& Folder : Folders)
+		FileTree->SetItemExpansion(All, true);
+		for (const TPair<FString, TSharedPtr<FDreamLocReviewFileNode>>& Folder : Folders)
 		{
 			FileTree->SetItemExpansion(Folder.Value, true);
 		}
 	}
 }
 
-void SDreamLocTranslateWindow::SetNodeChecked(const TSharedPtr<FDreamLocTranslateFileNode>& InNode, ECheckBoxState InState)
+void SDreamLocTranslateWindow::ShowEntry(TSharedPtr<FDreamLocReviewEntry> InEntry)
 {
-	TFunction<void(const TSharedPtr<FDreamLocTranslateFileNode>&)> Down = [&Down, InState](const TSharedPtr<FDreamLocTranslateFileNode>& InAt)
+	Current = InEntry;
+	if (Editor.IsValid())
 	{
-		InAt->Checked = InState;
-		for (const TSharedPtr<FDreamLocTranslateFileNode>& Child : InAt->Children)
-		{
-			Down(Child);
-		}
-	};
-	Down(InNode);
-	for (TSharedPtr<FDreamLocTranslateFileNode> Parent = InNode->Parent.Pin(); Parent.IsValid(); Parent = Parent->Parent.Pin())
+		Editor->Show(InEntry);
+	}
+	if (List.IsValid())
 	{
-		bool bAll = true;
-		bool bNone = true;
-		for (const TSharedPtr<FDreamLocTranslateFileNode>& Child : Parent->Children)
+		TGuardValue<bool> Guard(bSyncingSelection, true);
+		List->ClearSelection();
+		if (InEntry.IsValid() && Shown.Contains(InEntry))
 		{
-			bAll &= Child->Checked == ECheckBoxState::Checked;
-			bNone &= Child->Checked == ECheckBoxState::Unchecked;
+			List->SetSelection(InEntry, ESelectInfo::Direct);
+			List->RequestScrollIntoView(InEntry);
 		}
-		Parent->Checked = bAll ? ECheckBoxState::Checked : bNone ? ECheckBoxState::Unchecked : ECheckBoxState::Undetermined;
 	}
 }
 
-void SDreamLocTranslateWindow::CollectCheckedFiles(const TSharedPtr<FDreamLocTranslateFileNode>& InNode, TArray<FString>& OutFiles, bool& bOutAllChecked,
-	bool& bOutAnyChecked) const
+void SDreamLocTranslateWindow::SetCulture(const FString& InCulture)
 {
-	if (!InNode->bFolder)
+	if (InCulture == Culture)
 	{
-		if (InNode->Checked == ECheckBoxState::Checked)
-		{
-			OutFiles.Add(InNode->Path);
-			bOutAnyChecked = true;
-		}
-		else
-		{
-			bOutAllChecked = false;
-		}
 		return;
 	}
-	for (const TSharedPtr<FDreamLocTranslateFileNode>& Child : InNode->Children)
+	KeepEdit();
+	Culture = InCulture;
+	Current.Reset();
+	if (ReferenceCulture == Culture)
 	{
-		CollectCheckedFiles(Child, OutFiles, bOutAllChecked, bOutAnyChecked);
+		ReferenceCulture.Reset();
 	}
+	Refresh();
 }
 
-// ---------------------------------------------------------------------------------------------------------- runs
-
-void SDreamLocTranslateWindow::SetCultures(const TArray<FString>& InCultures)
+void SDreamLocTranslateWindow::SetReferenceCulture(const FString& InCulture)
 {
-	CheckedCultures.Reset();
-	CheckedCultures.Append(InCultures);
+	ReferenceCulture = InCulture == Culture ? FString() : InCulture;
+	Refresh();
+}
+
+void SDreamLocTranslateWindow::SetFilter(EDreamLocReviewFilter InFilter)
+{
+	Filter = InFilter;
+	RebuildShown();
+	ShowEntry(Current);
+}
+
+void SDreamLocTranslateWindow::SetSearch(const FString& InSearch)
+{
+	Search = InSearch;
+	RebuildShown();
+	ShowEntry(Current);
+}
+
+void SDreamLocTranslateWindow::SetFile(const FString& InFile)
+{
+	File = InFile;
+	RebuildShown();
+	ShowEntry(Current);
 }
 
 void SDreamLocTranslateWindow::SetProfile(const FString& InProfile)
 {
-	for (const TSharedPtr<FString>& Choice : ProfileChoices)
+	Profile = InProfile;
+	if (ProfileCombo.IsValid())
 	{
-		if (*Choice == InProfile)
+		for (const TSharedPtr<FString>& Choice : ProfileChoices)
 		{
-			ChosenProfile = Choice;
-			if (ProfileCombo.IsValid())
+			if (*Choice == InProfile)
 			{
 				ProfileCombo->SetSelectedItem(Choice);
 			}
-			return;
 		}
 	}
 }
 
-void SDreamLocTranslateWindow::SetIncludeMachine(bool bInInclude)
+bool SDreamLocTranslateWindow::Select(const FString& InNamespace, const FString& InKey)
 {
-	bIncludeMachine = bInInclude;
+	const TSharedPtr<FDreamLocReviewEntry> Found = Model.Find(InNamespace, InKey);
+	if (!Found.IsValid())
+	{
+		return false;
+	}
+	KeepEdit();
+	const TSharedPtr<FDreamLocReviewEntry> Again = Model.Find(InNamespace, InKey);
+	if (!Shown.Contains(Again))
+	{
+		Filter = EDreamLocReviewFilter::All;
+		Search.Reset();
+		File.Reset();
+		if (SearchBox.IsValid())
+		{
+			SearchBox->SetText(FText::GetEmpty());
+		}
+		RebuildShown();
+	}
+	ShowEntry(Again);
+	return true;
 }
 
-FDreamLocTranslateRequest SDreamLocTranslateWindow::MakeRequest(bool& bOutNoFiles) const
+FText SDreamLocTranslateWindow::FilterLabel(EDreamLocReviewFilter InFilter) const
+{
+	return FText::Format(LOCTEXT("FilterLabel", "{0} {1}"), DreamLocTranslateWindowLocal::FilterName(InFilter), Model.Count(InFilter, Search, File));
+}
+
+FText SDreamLocTranslateWindow::ProfileLabel(const FString& InName) const
+{
+	if (InName.IsEmpty())
+	{
+		return LOCTEXT("EachCulturesOwn", "Each culture's own translator");
+	}
+	if (const FDreamLocTranslateProfile* Found = DreamLocTranslateConfig::FindProfile(Profiles, InName))
+	{
+		return FText::Format(LOCTEXT("ProfileLabel", "{0} ({1}, {2})"), FText::FromString(Found->Name), FText::FromString(Found->Type),
+			Found->IsLocal() ? LOCTEXT("Local", "local") : LOCTEXT("Cloud", "cloud"));
+	}
+	return FText::FromString(InName);
+}
+
+FText SDreamLocTranslateWindow::ProgressText() const
+{
+	const FDreamLocReviewProgress Progress = Model.GetProgress(File);
+	FFormatNamedArguments Args;
+	Args.Add(TEXT("Done"), Progress.Done);
+	Args.Add(TEXT("Total"), Progress.Total());
+	Args.Add(TEXT("Review"), Progress.Review);
+	Args.Add(TEXT("Untranslated"), Progress.Untranslated);
+	Args.Add(TEXT("Stale"), Progress.Stale);
+	return FText::Format(LOCTEXT("Progress", "{Done} of {Total} reviewed   {Review} to review, {Untranslated} untranslated, {Stale} stale"), Args);
+}
+
+TSharedPtr<SWidget> SDreamLocTranslateWindow::GetRowWidget(const TSharedPtr<FDreamLocReviewEntry>& InEntry) const
+{
+	const TSharedPtr<ITableRow> Row = List.IsValid() ? List->WidgetFromItem(InEntry) : nullptr;
+	return Row.IsValid() ? Row->AsWidget() : TSharedPtr<SWidget>();
+}
+
+TArray<TSharedPtr<FDreamLocReviewEntry>> SDreamLocTranslateWindow::GetSelectedEntries() const
+{
+	return List.IsValid() ? List->GetSelectedItems() : TArray<TSharedPtr<FDreamLocReviewEntry>>();
+}
+
+FString SDreamLocTranslateWindow::GetEditText() const
+{
+	return Editor.IsValid() ? Editor->GetText() : FString();
+}
+
+FString SDreamLocTranslateWindow::GetEditProblems() const
+{
+	return Editor.IsValid() ? Editor->GetProblems() : FString();
+}
+
+FReply SDreamLocTranslateWindow::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	return Editor.IsValid() ? Editor->HandleKey(InKeyEvent) : FReply::Unhandled();
+}
+
+// ---------------------------------------------------------------------------------------------------------- decisions
+
+bool SDreamLocTranslateWindow::WriteCurrent(const TOptional<FString>& InText, const FString& InState)
+{
+	if (!Current.IsValid())
+	{
+		return false;
+	}
+	DreamLocTranslateFlow::FReviewEdit Edit = Model.MakeEdit(*Current);
+	if (InText.IsSet() && !InText->IsEmpty())
+	{
+		Edit.Text = InText.GetValue();
+		Edit.State = InState;
+	}
+	const FString Namespace = Current->Entry.Namespace;
+	const FString Key = Current->Entry.Key;
+	LastErrors.Reset();
+	const bool bWritten = Model.Apply({ Edit }, LastErrors);
+	StatusText = bWritten ? FText::GetEmpty() : FText::FromString(FString::Join(LastErrors, TEXT("; ")));
+	RebuildShown();
+	RebuildFiles();
+	ShowEntry(Model.Find(Namespace, Key));
+	return bWritten;
+}
+
+bool SDreamLocTranslateWindow::KeepEdit()
+{
+	if (!Editor.IsValid() || !Editor->IsChanged())
+	{
+		return true;
+	}
+	return WriteCurrent(Editor->GetText(), TEXT("draft"));
+}
+
+TSharedPtr<FDreamLocReviewEntry> SDreamLocTranslateWindow::FindAfter(const TSharedPtr<FDreamLocReviewEntry>& InFrom, TFunctionRef<bool(const FDreamLocReviewEntry&)> InWanted) const
+{
+	const int32 From = InFrom.IsValid() ? Shown.IndexOfByKey(InFrom) : INDEX_NONE;
+	for (int32 Step = 1; Step <= Shown.Num(); ++Step)
+	{
+		const TSharedPtr<FDreamLocReviewEntry>& Each = Shown[(FMath::Max(From, -1) + Step) % Shown.Num()];
+		if (Each != InFrom && InWanted(*Each))
+		{
+			return Each;
+		}
+	}
+	return nullptr;
+}
+
+bool SDreamLocTranslateWindow::PassAndNext()
+{
+	if (!Current.IsValid() || GetEditText().IsEmpty())
+	{
+		return false;
+	}
+	const TSharedPtr<FDreamLocReviewEntry> Next = FindAfter(Current, [](const FDreamLocReviewEntry& InEntry) { return InEntry.Status != EDreamLocReviewStatus::Done; });
+	const FString NextNamespace = Next.IsValid() ? Next->Entry.Namespace : FString();
+	const FString NextKey = Next.IsValid() ? Next->Entry.Key : FString();
+	if (!WriteCurrent(GetEditText(), TEXT("done")))
+	{
+		return false;
+	}
+	if (Next.IsValid())
+	{
+		ShowEntry(Model.Find(NextNamespace, NextKey));
+	}
+	return true;
+}
+
+bool SDreamLocTranslateWindow::DraftAndNext()
+{
+	if (!Current.IsValid())
+	{
+		return false;
+	}
+	const TSharedPtr<FDreamLocReviewEntry> Next = FindAfter(Current, [](const FDreamLocReviewEntry&) { return true; });
+	const FString NextNamespace = Next.IsValid() ? Next->Entry.Namespace : FString();
+	const FString NextKey = Next.IsValid() ? Next->Entry.Key : FString();
+	if (!WriteCurrent(GetEditText(), TEXT("draft")))
+	{
+		return false;
+	}
+	if (Next.IsValid())
+	{
+		ShowEntry(Model.Find(NextNamespace, NextKey));
+	}
+	return true;
+}
+
+bool SDreamLocTranslateWindow::SelectNext(int32 InDirection)
+{
+	if (Shown.IsEmpty())
+	{
+		return false;
+	}
+	const FString Namespace = Current.IsValid() ? Current->Entry.Namespace : FString();
+	const FString Key = Current.IsValid() ? Current->Entry.Key : FString();
+	int32 Index = Current.IsValid() ? Shown.IndexOfByKey(Current) : INDEX_NONE;
+	const int32 Target = Index == INDEX_NONE ? 0 : FMath::Clamp(Index + InDirection, 0, Shown.Num() - 1);
+	const FString TargetNamespace = Shown[Target]->Entry.Namespace;
+	const FString TargetKey = Shown[Target]->Entry.Key;
+	KeepEdit();
+	ShowEntry(Model.Find(TargetNamespace, TargetKey));
+	return true;
+}
+
+bool SDreamLocTranslateWindow::ClearCurrent()
+{
+	return WriteCurrent(TOptional<FString>(), FString());
+}
+
+bool SDreamLocTranslateWindow::InsertNextMissing()
+{
+	if (!Current.IsValid())
+	{
+		return false;
+	}
+	const TOptional<FString> Missing = DreamLocChips::NextMissing(Current->Entry.Source, GetEditText());
+	return Missing.IsSet() && Editor->InsertAtCursor(Missing.GetValue());
+}
+
+bool SDreamLocTranslateWindow::PassEntries(TConstArrayView<TSharedPtr<FDreamLocReviewEntry>> InEntries)
+{
+	TArray<DreamLocTranslateFlow::FReviewEdit> Edits;
+	for (const TSharedPtr<FDreamLocReviewEntry>& Entry : InEntries)
+	{
+		if (Entry.IsValid() && !Entry->Translation.IsEmpty())
+		{
+			DreamLocTranslateFlow::FReviewEdit Edit = Model.MakeEdit(*Entry);
+			Edit.Text = Entry == Current && Editor->IsChanged() ? Editor->GetText() : Entry->Translation;
+			Edit.State = TEXT("done");
+			Edits.Add(MoveTemp(Edit));
+		}
+	}
+	if (Edits.IsEmpty())
+	{
+		return false;
+	}
+	LastErrors.Reset();
+	const bool bWritten = Model.Apply(Edits, LastErrors);
+	Reload();
+	return bWritten;
+}
+
+bool SDreamLocTranslateWindow::RejectEntries(TConstArrayView<TSharedPtr<FDreamLocReviewEntry>> InEntries)
+{
+	TArray<DreamLocTranslateFlow::FReviewEdit> Edits;
+	for (const TSharedPtr<FDreamLocReviewEntry>& Entry : InEntries)
+	{
+		if (Entry.IsValid() && !Entry->Translation.IsEmpty())
+		{
+			Edits.Add(Model.MakeEdit(*Entry));
+		}
+	}
+	if (Edits.IsEmpty())
+	{
+		return false;
+	}
+	LastErrors.Reset();
+	const bool bWritten = Model.Apply(Edits, LastErrors);
+	Reload();
+	return bWritten;
+}
+
+// ---------------------------------------------------------------------------------------------------------- runs
+
+FDreamLocTranslateRequest SDreamLocTranslateWindow::MakeBaseRequest() const
 {
 	FDreamLocTranslateRequest Request;
 	Request.DLocDirectory = DLocDirectory;
 	Request.OwnerDirectory = OwnerDirectory;
-	for (const FString& Culture : AllCultures)
-	{
-		if (CheckedCultures.Contains(Culture))
-		{
-			Request.Cultures.Add(Culture);
-		}
-	}
-	bool bAll = true;
-	bool bAny = false;
-	TArray<FString> Files;
-	for (const TSharedPtr<FDreamLocTranslateFileNode>& Root : FileRoots)
-	{
-		CollectCheckedFiles(Root, Files, bAll, bAny);
-	}
-	bOutNoFiles = FileRoots.Num() > 0 && !bAny;
-	if (!bAll)
-	{
-		Request.Files = MoveTemp(Files);
-	}
-	Request.bIncludeUntranslated = bIncludeUntranslated;
-	Request.bIncludeStale = bIncludeStale;
-	Request.bIncludeMachine = bIncludeMachine;
-	Request.Profile = ChosenProfile.IsValid() ? *ChosenProfile : FString();
-	for (const TSharedPtr<FDreamLocTranslateProfile>& Profile : ProfileItems)
-	{
-		Request.Profiles.Add(*Profile);
-	}
+	Request.Profiles = Profiles;
 	Request.Settings = Settings;
+	Request.Profile = Profile;
+	// The reports beside the sources' project: the project's own Saved/DLoc in the editor.
+	Request.ReportDirectory = OwnerDirectory / TEXT("Saved/DLoc");
 	return Request;
 }
 
-FDreamLocTranslateEstimate SDreamLocTranslateWindow::RunEstimate()
+FDreamLocTranslateRequest SDreamLocTranslateWindow::MakeEntriesRequest(TConstArrayView<TSharedPtr<FDreamLocReviewEntry>> InEntries, const FString& InProfile) const
 {
-	bool bNoFiles = false;
-	const FDreamLocTranslateRequest Request = MakeRequest(bNoFiles);
-	FDreamLocTranslateEstimate Estimate;
-	if (Request.Cultures.IsEmpty())
+	FDreamLocTranslateRequest Request = MakeBaseRequest();
+	Request.Cultures = { Culture };
+	Request.Profile = InProfile;
+	Request.bIncludeUntranslated = true;
+	Request.bIncludeStale = true;
+	Request.bIncludeMachine = true;
+	for (const TSharedPtr<FDreamLocReviewEntry>& Entry : InEntries)
 	{
-		Estimate.Errors.Add(LOCTEXT("NoCultureChosen", "Choose a culture first.").ToString());
+		Request.Entries.Emplace(Entry->Entry.Namespace, Entry->Entry.Key);
 	}
-	else if (bNoFiles)
-	{
-		Estimate.Errors.Add(LOCTEXT("NoFileChosen", "Choose a file first.").ToString());
-	}
-	else
-	{
-		Estimate = DreamLocTranslateFlow::Estimate(Request);
-	}
-	if (Request.Cultures.IsEmpty() || bNoFiles)
-	{
-		EstimateText = FText::FromString(FString::Join(Estimate.Errors, TEXT("\n")));
-		return Estimate;
-	}
-	// The entries and characters stand without a translator; the requests and tokens need one.
-	FFormatNamedArguments Args;
-	Args.Add(TEXT("Entries"), Estimate.Entries);
-	Args.Add(TEXT("Distinct"), Estimate.Distinct);
-	Args.Add(TEXT("Characters"), Estimate.Characters);
-	Args.Add(TEXT("Tokens"), Estimate.Tokens);
-	Args.Add(TEXT("Batches"), Estimate.Batches);
-	Args.Add(TEXT("Skipped"), Estimate.Skipped);
-	const FText Counts = Estimate.bTranslatorKnown
-		? FText::Format(LOCTEXT("EstimateResult",
-			"{Entries} {Entries}|plural(one=entry,other=entries): {Distinct} {Distinct}|plural(one=text,other=texts) to send, {Characters} {Characters}|plural(one=character,other=characters), about {Tokens} {Tokens}|plural(one=token,other=tokens) for a large model, {Batches} {Batches}|plural(one=request,other=requests); {Skipped} left out"),
-			Args)
-		: FText::Format(LOCTEXT("EstimateWithoutTranslator",
-			"{Entries} {Entries}|plural(one=entry,other=entries): {Distinct} {Distinct}|plural(one=text,other=texts) to send, {Characters} {Characters}|plural(one=character,other=characters); choose a translator to count the requests and tokens"),
-			Args);
-	EstimateText = Estimate.Errors.IsEmpty() ? Counts
-		: FText::Format(LOCTEXT("EstimateAndErrors", "{0}\n{1}"), Counts, FText::FromString(FString::Join(Estimate.Errors, TEXT("\n"))));
-	return Estimate;
+	return Request;
 }
 
-FReply SDreamLocTranslateWindow::OnTranslateClicked()
+bool SDreamLocTranslateWindow::Retranslate()
 {
-	const FDreamLocTranslateEstimate Estimate = RunEstimate();
-	if (Estimate.Errors.Num() > 0 || Estimate.Distinct == 0)
+	if (!Current.IsValid() || IsRunning())
 	{
-		if (Estimate.Errors.IsEmpty())
-		{
-			EstimateText = LOCTEXT("NothingToSend", "Nothing to translate: every chosen entry is translated, or left out.");
-		}
-		return FReply::Handled();
+		return false;
 	}
-	const EAppReturnType::Type Answer = FMessageDialog::Open(EAppMsgType::OkCancel,
-		FText::Format(LOCTEXT("ConfirmSend", "{0}\n\nSend them?"), EstimateText), LOCTEXT("ConfirmTitle", "DreamLoc Translate"));
-	if (Answer == EAppReturnType::Ok)
+	KeepEdit();
+	// A draft or a reviewed translation is the flow's to leave alone: what comes back for it is machine, so it is cleared first.
+	if (Current.IsValid() && (Current->Entry.State.Equals(TEXT("draft"), ESearchCase::IgnoreCase) || Current->Status == EDreamLocReviewStatus::Done))
 	{
-		StartTranslate();
+		ClearCurrent();
 	}
-	return FReply::Handled();
+	return Current.IsValid() && StartRun(MakeEntriesRequest({ Current }, Profile));
 }
 
-bool SDreamLocTranslateWindow::StartTranslate()
+bool SDreamLocTranslateWindow::TranslateEntries(TConstArrayView<TSharedPtr<FDreamLocReviewEntry>> InEntries, const FString& InProfile)
+{
+	if (InEntries.IsEmpty() || IsRunning())
+	{
+		return false;
+	}
+	KeepEdit();
+	return StartRun(MakeEntriesRequest(InEntries, InProfile.IsEmpty() ? Profile : InProfile));
+}
+
+bool SDreamLocTranslateWindow::StartRun(const FDreamLocTranslateRequest& InRequest, TFunction<void(const FDreamLocTranslateResult&)> InOnDone)
 {
 	if (IsRunning())
 	{
 		return false;
 	}
-	bool bNoFiles = false;
-	const FDreamLocTranslateRequest Request = MakeRequest(bNoFiles);
-	if (Request.Cultures.IsEmpty() || bNoFiles)
+	const TSharedRef<FRunState> State = MakeShared<FRunState>();
+	Running = State;
+	StatusText = LOCTEXT("Translating", "Translating...");
+	const TWeakPtr<SDreamLocTranslateWindow> Weak = SharedThis(this);
+	Async(EAsyncExecution::Thread, [State, InRequest, Weak, InOnDone]()
 	{
-		StatusText = Request.Cultures.IsEmpty() ? LOCTEXT("NoCultureChosen", "Choose a culture first.") : LOCTEXT("NoFileChosen", "Choose a file first.");
-		return false;
-	}
-	RunRequest(Request, nullptr);
+		FDreamLocTranslateResult Result = DreamLocTranslateFlow::Run(InRequest, [State](const FDreamLocTranslateProgress& InProgress)
+		{
+			FScopeLock Lock(&State->Lock);
+			State->Progress = InProgress;
+		}, State->Cancel);
+		AsyncTask(ENamedThreads::GameThread, [Weak, Result = MoveTemp(Result), InOnDone]()
+		{
+			if (const TSharedPtr<SDreamLocTranslateWindow> Window = Weak.Pin())
+			{
+				Window->OnRunFinished(Result, InOnDone);
+			}
+		});
+	});
 	return true;
 }
 
-void SDreamLocTranslateWindow::CancelTranslate()
+void SDreamLocTranslateWindow::OnRunFinished(const FDreamLocTranslateResult& InResult, TFunction<void(const FDreamLocTranslateResult&)> InOnDone)
 {
-	if (Running.IsValid())
+	Running.Reset();
+	LastResult = InResult;
+	LastErrors = InResult.Errors;
+	Reload();
+	if (InResult.Errors.Num() > 0)
 	{
-		Running->Cancel = true;
+		StatusText = FText::FromString(FString::Join(InResult.Errors, TEXT("; ")));
+	}
+	else
+	{
+		FFormatNamedArguments Args;
+		Args.Add(TEXT("Translated"), InResult.Translated);
+		Args.Add(TEXT("Failed"), InResult.Failed);
+		Args.Add(TEXT("Skipped"), InResult.Skipped);
+		Args.Add(TEXT("Cancelled"), InResult.bCancelled ? LOCTEXT("WasCancelled", " (cancelled)") : FText::GetEmpty());
+		StatusText = FText::Format(LOCTEXT("RunFinished", "{Translated} translated, {Failed} failed, {Skipped} skipped{Cancelled}"), Args);
+	}
+	if (InOnDone)
+	{
+		InOnDone(InResult);
 	}
 }
 
@@ -969,249 +1092,15 @@ bool SDreamLocTranslateWindow::IsRunning() const
 	return Running.IsValid();
 }
 
-void SDreamLocTranslateWindow::RunRequest(const FDreamLocTranslateRequest& InRequest, TSharedPtr<FDreamLocTranslateRowItem> InOnlyRow)
+void SDreamLocTranslateWindow::CancelRun()
 {
-	const TSharedRef<FRunState> State = MakeShared<FRunState>();
-	State->Started = FPlatformTime::Seconds();
-	Running = State;
-	StatusText = LOCTEXT("Translating", "Translating...");
-	const TWeakPtr<SDreamLocTranslateWindow> Weak = SharedThis(this);
-	Async(EAsyncExecution::Thread, [State, InRequest, Weak, InOnlyRow]()
+	if (Running.IsValid())
 	{
-		FDreamLocTranslateResult Result = DreamLocTranslateFlow::Run(InRequest, [State](const FDreamLocTranslateProgress& InProgress)
-		{
-			FScopeLock Lock(&State->Lock);
-			State->Progress = InProgress;
-		}, State->Cancel);
-		AsyncTask(ENamedThreads::GameThread, [Weak, Result = MoveTemp(Result), InOnlyRow]()
-		{
-			if (const TSharedPtr<SDreamLocTranslateWindow> Window = Weak.Pin())
-			{
-				Window->OnRunFinished(Result, InOnlyRow);
-			}
-		});
-	});
-}
-
-void SDreamLocTranslateWindow::OnRunFinished(const FDreamLocTranslateResult& InResult, TSharedPtr<FDreamLocTranslateRowItem> InOnlyRow)
-{
-	Running.Reset();
-	LastResult = InResult;
-	if (InOnlyRow.IsValid())
-	{
-		InOnlyRow->bBusy = false;
-		for (const FDreamLocTranslateRow& Row : InResult.Rows)
-		{
-			if (Row.Culture == InOnlyRow->Row.Culture && Row.Namespace == InOnlyRow->Row.Namespace && Row.Key == InOnlyRow->Row.Key)
-			{
-				InOnlyRow->Row = Row;
-				InOnlyRow->Review.Reset();
-			}
-		}
-	}
-	else
-	{
-		SetRows(InResult.Rows);
-	}
-	if (InResult.Errors.Num() > 0)
-	{
-		StatusText = FText::FromString(FString::Join(InResult.Errors, TEXT("\n")));
-	}
-	else
-	{
-		FFormatNamedArguments Args;
-		Args.Add(TEXT("Translated"), InResult.Translated);
-		Args.Add(TEXT("Failed"), InResult.Failed);
-		Args.Add(TEXT("Skipped"), InResult.Skipped);
-		Args.Add(TEXT("Requests"), InResult.Requests);
-		Args.Add(TEXT("Seconds"), FText::AsNumber(FMath::RoundToDouble(InResult.Seconds * 10.0) / 10.0));
-		Args.Add(TEXT("Tokens"), InResult.PromptTokens + InResult.CompletionTokens);
-		Args.Add(TEXT("Cancelled"), InResult.bCancelled ? LOCTEXT("WasCancelled", " (cancelled)") : FText::GetEmpty());
-		Args.Add(TEXT("Report"), FText::FromString(InResult.ReportPaths.Num() > 0 ? InResult.ReportPaths.Last() : FString()));
-		StatusText = FText::Format(LOCTEXT("RunFinished",
-			"{Translated} translated, {Failed} failed, {Skipped} skipped{Cancelled}; {Requests} {Requests}|plural(one=request,other=requests), {Tokens} {Tokens}|plural(one=token,other=tokens), {Seconds} s. Report: {Report}"),
-			Args);
-	}
-	if (ResultsList.IsValid())
-	{
-		ResultsList->RequestListRefresh();
+		Running->Cancel = true;
 	}
 }
 
-void SDreamLocTranslateWindow::SetRows(TConstArrayView<FDreamLocTranslateRow> InRows)
-{
-	RowItems.Reset();
-	for (const FDreamLocTranslateRow& Row : InRows)
-	{
-		const TSharedPtr<FDreamLocTranslateRowItem> Item = MakeShared<FDreamLocTranslateRowItem>();
-		Item->Row = Row;
-		RowItems.Add(Item);
-	}
-	if (ResultsList.IsValid())
-	{
-		ResultsList->RequestListRefresh();
-	}
-}
-
-void SDreamLocTranslateWindow::LoadForReview()
-{
-	bool bNoFiles = false;
-	const FDreamLocTranslateRequest Request = MakeRequest(bNoFiles);
-	const TArray<FDreamLocTranslateRow> Rows = bNoFiles ? TArray<FDreamLocTranslateRow>() : DreamLocTranslateFlow::LoadForReview(Request);
-	SetRows(Rows);
-	StatusText = FText::Format(LOCTEXT("LoadedForReview", "{0} machine {0}|plural(one=translation,other=translations) to review"), Rows.Num());
-}
-
-bool SDreamLocTranslateWindow::ApplyEdits(TConstArrayView<TSharedPtr<FDreamLocTranslateRowItem>> InItems,
-	TFunctionRef<bool(DreamLocTranslateFlow::FReviewEdit&, FDreamLocTranslateRowItem&)> InMake, const TCHAR* InReview)
-{
-	TArray<DreamLocTranslateFlow::FReviewEdit> Edits;
-	TArray<TSharedPtr<FDreamLocTranslateRowItem>> Changed;
-	for (const TSharedPtr<FDreamLocTranslateRowItem>& Item : InItems)
-	{
-		if (!Item.IsValid() || Item->bBusy)
-		{
-			continue;
-		}
-		DreamLocTranslateFlow::FReviewEdit Edit;
-		Edit.Culture = Item->Row.Culture;
-		Edit.File = Item->Row.File;
-		Edit.Namespace = Item->Row.Namespace;
-		Edit.Key = Item->Row.Key;
-		if (InMake(Edit, *Item))
-		{
-			Edits.Add(MoveTemp(Edit));
-			Changed.Add(Item);
-		}
-	}
-	if (Edits.IsEmpty())
-	{
-		UE_LOG(LogDreamLocTranslate, Verbose, TEXT("%s: %d row(s) asked, none to write (busy, or nothing to write)"), InReview, InItems.Num());
-		return false;
-	}
-	LastErrors.Reset();
-	const bool bWritten = DreamLocTranslateFlow::ApplyReview(DLocDirectory, Edits, LastErrors);
-	UE_LOG(LogDreamLocTranslate, Verbose, TEXT("%s: %d row(s) asked, %d written to %s%s%s"), InReview, InItems.Num(), Edits.Num(), *DLocDirectory,
-		bWritten ? TEXT("") : TEXT(": "), *FString::Join(LastErrors, TEXT("; ")));
-	for (const TSharedPtr<FDreamLocTranslateRowItem>& Item : Changed)
-	{
-		Item->Review = InReview;
-	}
-	if (!bWritten)
-	{
-		StatusText = FText::FromString(FString::Join(LastErrors, TEXT("\n")));
-	}
-	if (ResultsList.IsValid())
-	{
-		ResultsList->RequestListRefresh();
-	}
-	return bWritten;
-}
-
-bool SDreamLocTranslateWindow::PassRows(TConstArrayView<TSharedPtr<FDreamLocTranslateRowItem>> InItems)
-{
-	return ApplyEdits(InItems, [](DreamLocTranslateFlow::FReviewEdit& OutEdit, FDreamLocTranslateRowItem& InItem)
-	{
-		if (InItem.Row.NewText.IsEmpty())
-		{
-			return false;
-		}
-		OutEdit.Text = InItem.Row.NewText;
-		OutEdit.State = TEXT("done");
-		return true;
-	}, TEXT("passed"));
-}
-
-bool SDreamLocTranslateWindow::RejectRows(TConstArrayView<TSharedPtr<FDreamLocTranslateRowItem>> InItems)
-{
-	return ApplyEdits(InItems, [](DreamLocTranslateFlow::FReviewEdit& OutEdit, FDreamLocTranslateRowItem& InItem)
-	{
-		if (InItem.Row.NewText.IsEmpty() || InItem.Review == TEXT("passed"))
-		{
-			return false;
-		}
-		OutEdit.Text.Reset();
-		InItem.Row.RejectedText = InItem.Row.NewText;
-		InItem.Row.NewText.Reset();
-		return true;
-	}, TEXT("rejected"));
-}
-
-bool SDreamLocTranslateWindow::EditRow(const TSharedPtr<FDreamLocTranslateRowItem>& InItem, const FString& InText)
-{
-	return ApplyEdits({ InItem }, [&InText](DreamLocTranslateFlow::FReviewEdit& OutEdit, FDreamLocTranslateRowItem& InOutItem)
-	{
-		if (InText.IsEmpty())
-		{
-			OutEdit.Text.Reset();
-		}
-		else
-		{
-			OutEdit.Text = InText;
-			OutEdit.State = TEXT("draft");
-		}
-		InOutItem.Row.NewText = InText;
-		return true;
-	}, TEXT("edited"));
-}
-
-bool SDreamLocTranslateWindow::RetranslateRow(const TSharedPtr<FDreamLocTranslateRowItem>& InItem)
-{
-	if (IsRunning() || !InItem.IsValid() || InItem->Review == TEXT("passed"))
-	{
-		UE_LOG(LogDreamLocTranslate, Verbose, TEXT("again: not now (%s)"), IsRunning() ? TEXT("a run is under way") : !InItem.IsValid() ? TEXT("no row")
-			: TEXT("the row is passed"));
-		return false;
-	}
-	bool bNoFiles = false;
-	FDreamLocTranslateRequest Request = MakeRequest(bNoFiles);
-	Request.Cultures = { InItem->Row.Culture };
-	Request.Files.Reset();
-	Request.Entries = { TPair<FString, FString>(InItem->Row.Namespace, InItem->Row.Key) };
-	Request.bIncludeUntranslated = true;
-	Request.bIncludeStale = true;
-	Request.bIncludeMachine = true;
-	InItem->bBusy = true;
-	UE_LOG(LogDreamLocTranslate, Verbose, TEXT("again: %s with %s"), *DreamLocTranslateWindowLocal::RowName(*InItem),
-		Request.Profile.IsEmpty() ? TEXT("each culture's own translator") : *Request.Profile);
-	RunRequest(Request, InItem);
-	return true;
-}
-
-void SDreamLocTranslateWindow::OpenRowInEditor(const TSharedPtr<FDreamLocTranslateRowItem>& InItem) const
-{
-	if (!InItem.IsValid())
-	{
-		return;
-	}
-	const FDreamLocTranslateRow& Row = InItem->Row;
-	const FString Path = FPaths::ConvertRelativePathToFull(DLocDirectory / Row.Culture / Row.File);
-	const int32 Line = DreamLocTranslateFlow::FindEntryLine(DLocDirectory, Row.Culture, Row.File, Row.Namespace, Row.Key);
-	if (!FSourceCodeNavigation::OpenSourceFile(Path, FMath::Max(1, Line), 1))
-	{
-		FPlatformProcess::LaunchFileInDefaultExternalApplication(*Path);
-	}
-}
-
-TSharedPtr<SWidget> SDreamLocTranslateWindow::GetRowWidget(const TSharedPtr<FDreamLocTranslateRowItem>& InItem) const
-{
-	const TSharedPtr<ITableRow> Row = ResultsList.IsValid() ? ResultsList->WidgetFromItem(InItem) : nullptr;
-	return Row.IsValid() ? Row->AsWidget() : TSharedPtr<SWidget>();
-}
-
-FText SDreamLocTranslateWindow::GetProgressText() const
-{
-	if (!Running.IsValid())
-	{
-		return StatusText;
-	}
-	FScopeLock Lock(&Running->Lock);
-	const FDreamLocTranslateProgress& Progress = Running->Progress;
-	return FText::Format(LOCTEXT("Progress", "{0}: {1} of {2} {2}|plural(one=request,other=requests) answered, {3} s"), FText::FromString(Progress.Culture),
-		Progress.BatchesDone, Progress.Batches, FText::AsNumber(int32(FPlatformTime::Seconds() - Running->Started)));
-}
-
-TOptional<float> SDreamLocTranslateWindow::GetProgressFraction() const
+float SDreamLocTranslateWindow::GetRunFraction() const
 {
 	if (!Running.IsValid())
 	{
@@ -1221,548 +1110,463 @@ TOptional<float> SDreamLocTranslateWindow::GetProgressFraction() const
 	return Running->Progress.Batches > 0 ? float(Running->Progress.BatchesDone) / float(Running->Progress.Batches) : 0.0f;
 }
 
-// ---------------------------------------------------------------------------------------------------------- the translators page
-
-FDreamLocTranslateProfile* SDreamLocTranslateWindow::GetSelectedProfile() const
+TSharedPtr<SDreamLocPretranslateDialog> SDreamLocTranslateWindow::OpenPretranslate()
 {
-	return SelectedProfile.Get();
-}
-
-TSharedRef<SWidget> SDreamLocTranslateWindow::MakeBackendsPage()
-{
-	return SNew(SScrollBox)
-		+ SScrollBox::Slot()
-		[
-			SNew(SVerticalBox)
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(STextBlock).Text_Lambda([this]() { return ProfilesText; }).AutoWrapText(true)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-			[
-				SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot().FillWidth(0.3f).Padding(0.0f, 0.0f, 8.0f, 0.0f)
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(SBox).HeightOverride(220.0f)
-						[
-							SNew(SBorder).BorderImage(FAppStyle::GetBrush(TEXT("ToolPanel.GroupBorder")))
-							[
-								SAssignNew(ProfileList, SListView<TSharedPtr<FDreamLocTranslateProfile>>)
-								.ListItemsSource(&ProfileItems)
-								.SelectionMode(ESelectionMode::Single)
-								.OnGenerateRow_Lambda([this](TSharedPtr<FDreamLocTranslateProfile> InProfile, const TSharedRef<STableViewBase>& InOwner) -> TSharedRef<ITableRow>
-								{
-									return SNew(STableRow<TSharedPtr<FDreamLocTranslateProfile>>, InOwner)
-									[
-										SNew(STextBlock).Text_Lambda([this, InProfile]() { return ProfileLabel(InProfile->Name); })
-									];
-								})
-								.OnSelectionChanged_Lambda([this](TSharedPtr<FDreamLocTranslateProfile> InProfile, ESelectInfo::Type)
-								{
-									if (InProfile.IsValid())
-									{
-										SelectedProfile = InProfile;
-										TestText = FText::GetEmpty();
-										for (const TSharedPtr<FString>& Type : TypeChoices)
-										{
-											if (Type->Equals(InProfile->Type, ESearchCase::IgnoreCase) && TypeCombo.IsValid())
-											{
-												TypeCombo->SetSelectedItem(Type);
-											}
-										}
-									}
-								})
-							]
-						]
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-					[
-						SNew(SHorizontalBox)
-						+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-						[
-							SNew(SButton).Text(LOCTEXT("AddProfile", "Add"))
-							.OnClicked_Lambda([this]()
-							{
-								const TSharedPtr<FDreamLocTranslateProfile> Profile = MakeShared<FDreamLocTranslateProfile>();
-								Profile->Type = TEXT("OpenAI");
-								for (int32 Number = ProfileItems.Num() + 1;; ++Number)
-								{
-									Profile->Name = FString::Printf(TEXT("profile%d"), Number);
-									if (!ProfileItems.ContainsByPredicate([&Profile](const TSharedPtr<FDreamLocTranslateProfile>& InOther) { return InOther->Name == Profile->Name; }))
-									{
-										break;
-									}
-								}
-								ProfileItems.Add(Profile);
-								ProfileList->RequestListRefresh();
-								ProfileList->SetSelection(Profile);
-								return FReply::Handled();
-							})
-						]
-						+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-						[
-							SNew(SButton).Text(LOCTEXT("DeleteProfile", "Delete"))
-							.IsEnabled_Lambda([this]() { return SelectedProfile.IsValid(); })
-							.OnClicked_Lambda([this]()
-							{
-								ProfileItems.Remove(SelectedProfile);
-								SelectedProfile = ProfileItems.Num() > 0 ? ProfileItems[0] : nullptr;
-								ProfileList->RequestListRefresh();
-								if (SelectedProfile.IsValid())
-								{
-									ProfileList->SetSelection(SelectedProfile);
-								}
-								return FReply::Handled();
-							})
-						]
-						+ SHorizontalBox::Slot().AutoWidth()
-						[
-							SNew(SButton).Text(LOCTEXT("SaveProfiles", "Save"))
-							.ToolTipText(FText::Format(LOCTEXT("SaveProfilesTip", "Write the profiles to {0}"), FText::FromString(DreamLocTranslateConfig::GetUserConfigPath())))
-							.OnClicked_Lambda([this]() { SaveProfiles(); return FReply::Handled(); })
-						]
-					]
-				]
-				+ SHorizontalBox::Slot().FillWidth(0.7f)
-				[
-					MakeProfileForm()
-				]
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 4.0f)
-			[
-				SNew(SSeparator)
-			]
-			+ SVerticalBox::Slot().AutoHeight()
-			[
-				MakeProjectSettings()
-			]
-		];
-}
-
-TSharedRef<SWidget> SDreamLocTranslateWindow::MakeProfileForm()
-{
-	using namespace DreamLocTranslateWindowLocal;
-	TSharedRef<SGridPanel> Grid = SNew(SGridPanel).FillColumn(1, 1.0f);
-	int32 RowIndex = 0;
-	auto Visible = [this](FName InField)
+	if (const TSharedPtr<SWindow> Open = PretranslateWindow.Pin())
 	{
-		return TAttribute<EVisibility>::CreateLambda([this, InField]()
-		{
-			const FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-			return Profile != nullptr && Shows(Profile->Type, InField) ? EVisibility::Visible : EVisibility::Collapsed;
-		});
-	};
-	auto AddRow = [&Grid, &RowIndex, &Visible](FName InField, const TAttribute<FText>& InLabel, const TSharedRef<SWidget>& InEditor)
-	{
-		Grid->AddSlot(0, RowIndex).VAlign(VAlign_Center).Padding(0.0f, 2.0f, 8.0f, 2.0f)[SNew(STextBlock).Text(InLabel).Visibility(Visible(InField))];
-		Grid->AddSlot(1, RowIndex).Padding(0.0f, 2.0f)[SNew(SBox).Visibility(Visible(InField))[InEditor]];
-		++RowIndex;
-	};
-	auto AddText = [this, &AddRow](FName InField, const TAttribute<FText>& InLabel, FString FDreamLocTranslateProfile::* InMember, bool bInPassword, const FText& InHint)
-	{
-		AddRow(InField, InLabel, SNew(SEditableTextBox)
-			.IsPassword(bInPassword)
-			.HintText(InHint)
-			.Text_Lambda([this, InMember]()
-			{
-				const FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-				return Profile != nullptr ? FText::FromString(Profile->*InMember) : FText::GetEmpty();
-			})
-			.OnTextChanged_Lambda([this, InMember](const FText& InText)
-			{
-				if (FDreamLocTranslateProfile* Profile = GetSelectedProfile())
-				{
-					Profile->*InMember = InText.ToString().TrimStartAndEnd();
-					if (ProfileList.IsValid())
-					{
-						ProfileList->RequestListRefresh();
-					}
-				}
-			}));
-	};
-	auto TypeOf = [this]() { const FDreamLocTranslateProfile* Profile = GetSelectedProfile(); return Profile != nullptr ? Profile->Type : FString(); };
-
-	AddText(TEXT("Name"), LOCTEXT("FieldName", "Name"), &FDreamLocTranslateProfile::Name, false, FText::GetEmpty());
-	AddRow(TEXT("Type"), LOCTEXT("FieldType", "Type"),
-		SAssignNew(TypeCombo, SComboBox<TSharedPtr<FString>>)
-		.OptionsSource(&TypeChoices)
-		.OnGenerateWidget_Lambda([](TSharedPtr<FString> InType) -> TSharedRef<SWidget> { return SNew(STextBlock).Text(FText::FromString(*InType)); })
-		.OnSelectionChanged_Lambda([this](TSharedPtr<FString> InType, ESelectInfo::Type)
-		{
-			FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-			if (Profile != nullptr && InType.IsValid())
-			{
-				Profile->Type = *InType;
-				ProfileList->RequestListRefresh();
-			}
-		})
-		[
-			SNew(STextBlock).Text_Lambda([TypeOf]() { return FText::FromString(TypeOf()); })
-		]);
-	AddText(TEXT("BaseUrl"), LOCTEXT("FieldBaseUrl", "Address"), &FDreamLocTranslateProfile::BaseUrl, false,
-		LOCTEXT("BaseUrlHint", "OpenAI: https://api.deepseek.com/v1, http://127.0.0.1:11434/v1 ...; others: empty for the service's own"));
-	AddText(TEXT("Model"), LOCTEXT("FieldModel", "Model"), &FDreamLocTranslateProfile::Model, false, LOCTEXT("ModelHint", "deepseek-chat, qwen3:14b ..."));
-	AddText(TEXT("ApiKey"), LOCTEXT("FieldApiKey", "Key"), &FDreamLocTranslateProfile::ApiKey, true, LOCTEXT("ApiKeyHint", "Better: the variable below"));
-	AddText(TEXT("ApiKeyEnv"), LOCTEXT("FieldApiKeyEnv", "Key from variable"), &FDreamLocTranslateProfile::ApiKeyEnv, false, LOCTEXT("ApiKeyEnvHint", "DEEPSEEK_API_KEY"));
-	AddText(TEXT("AppId"), TAttribute<FText>::CreateLambda([TypeOf]() { return AppIdLabel(TypeOf()); }), &FDreamLocTranslateProfile::AppId, true, FText::GetEmpty());
-	AddText(TEXT("AppIdEnv"), TAttribute<FText>::CreateLambda([TypeOf]() { return FText::Format(LOCTEXT("FromVariable", "{0} from variable"), AppIdLabel(TypeOf())); }),
-		&FDreamLocTranslateProfile::AppIdEnv, false, FText::GetEmpty());
-	AddText(TEXT("Secret"), TAttribute<FText>::CreateLambda([TypeOf]() { return SecretLabel(TypeOf()); }), &FDreamLocTranslateProfile::Secret, true, FText::GetEmpty());
-	AddText(TEXT("SecretEnv"), TAttribute<FText>::CreateLambda([TypeOf]() { return FText::Format(LOCTEXT("FromVariable", "{0} from variable"), SecretLabel(TypeOf())); }),
-		&FDreamLocTranslateProfile::SecretEnv, false, FText::GetEmpty());
-	AddText(TEXT("Region"), LOCTEXT("FieldRegion", "Region"), &FDreamLocTranslateProfile::Region, false, LOCTEXT("RegionHint", "ap-shanghai"));
-	AddText(TEXT("Proxy"), LOCTEXT("FieldProxy", "Proxy"), &FDreamLocTranslateProfile::Proxy, false, LOCTEXT("ProxyHint", "http://127.0.0.1:7890; empty for none"));
-	AddRow(TEXT("Temperature"), LOCTEXT("FieldTemperature", "Temperature"), SNew(SEditableTextBox)
-		.Text_Lambda([this]()
-		{
-			const FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-			return Profile != nullptr ? FText::FromString(FString::SanitizeFloat(Profile->Temperature)) : FText::GetEmpty();
-		})
-		.OnTextCommitted_Lambda([this](const FText& InText, ETextCommit::Type)
-		{
-			FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-			float Value = 0.0f;
-			if (Profile != nullptr && LexTryParseString(Value, *InText.ToString()))
-			{
-				Profile->Temperature = Value;
-			}
-		}));
-	AddRow(TEXT("JsonMode"), LOCTEXT("FieldJsonMode", "JSON mode"), SNew(SCheckBox)
-		.ToolTipText(LOCTEXT("JsonModeTip", "Ask for a JSON object (response_format); for a service that supports it"))
-		.IsChecked_Lambda([this]()
-		{
-			const FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-			return Profile != nullptr && Profile->bJsonMode ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
-		})
-		.OnCheckStateChanged_Lambda([this](ECheckBoxState InState)
-		{
-			if (FDreamLocTranslateProfile* Profile = GetSelectedProfile())
-			{
-				Profile->bJsonMode = InState == ECheckBoxState::Checked;
-			}
-		}));
-	AddRow(TEXT("Local"), LOCTEXT("FieldLocal", "Runs on"), SNew(SSegmentedControl<int32>)
-		.Value_Lambda([this]()
-		{
-			const FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-			return Profile == nullptr || !Profile->Local.IsSet() ? 0 : Profile->Local.GetValue() ? 1 : 2;
-		})
-		.OnValueChanged_Lambda([this](int32 InValue)
-		{
-			if (FDreamLocTranslateProfile* Profile = GetSelectedProfile())
-			{
-				Profile->Local = InValue == 0 ? TOptional<bool>() : TOptional<bool>(InValue == 1);
-				ProfileList->RequestListRefresh();
-			}
-		})
-		+ SSegmentedControl<int32>::Slot(0).Text(LOCTEXT("LocalAuto", "By its address"))
-		+ SSegmentedControl<int32>::Slot(1).Text(LOCTEXT("LocalYes", "This machine"))
-		+ SSegmentedControl<int32>::Slot(2).Text(LOCTEXT("LocalNo", "A cloud service")));
-
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			SNew(STextBlock)
-			.Visibility_Lambda([this]() { return GetSelectedProfile() == nullptr ? EVisibility::Visible : EVisibility::Collapsed; })
-			.Text(LOCTEXT("NoProfile", "No profile yet: Add one."))
-		]
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			SNew(SBox).Visibility_Lambda([this]() { return GetSelectedProfile() != nullptr ? EVisibility::Visible : EVisibility::Collapsed; })
-			[
-				Grid
-			]
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-		[
-			SNew(STextBlock)
-			.AutoWrapText(true)
-			.ColorAndOpacity(FStyleColors::Warning)
-			.Visibility_Lambda([this]()
-			{
-				const FDreamLocTranslateProfile* Profile = GetSelectedProfile();
-				return Profile != nullptr && Profile->HasSecretInFile() ? EVisibility::Visible : EVisibility::Collapsed;
-			})
-			.Text(LOCTEXT("PlainKeyWarning",
-				"This profile's key is written into translators.ini as plain text. A variable (the 'from variable' fields) keeps it out of the file."))
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
-			[
-				SNew(SButton).Text(LOCTEXT("TestProfile", "Test"))
-				.ToolTipText(LOCTEXT("TestProfileTip", "Send the smallest request -- one short text -- and say how it went"))
-				.IsEnabled_Lambda([this]() { return GetSelectedProfile() != nullptr; })
-				.OnClicked_Lambda([this]() { TestProfile(); return FReply::Handled(); })
-			]
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-			[
-				SNew(STextBlock).Text_Lambda([this]() { return TestText; }).AutoWrapText(true)
-			]
-		];
-}
-
-void SDreamLocTranslateWindow::SaveProfiles()
-{
-	TArray<FDreamLocTranslateProfile> Values;
-	TSet<FString> Names;
-	for (const TSharedPtr<FDreamLocTranslateProfile>& Profile : ProfileItems)
-	{
-		if (Profile->Name.IsEmpty() || Names.Contains(Profile->Name))
-		{
-			ProfilesText = FText::Format(LOCTEXT("ProfileNameClash", "Not saved: every profile needs a name of its own ('{0}')."), FText::FromString(Profile->Name));
-			return;
-		}
-		Names.Add(Profile->Name);
-		Values.Add(*Profile);
+		Open->BringToFront();
+		return StaticCastSharedRef<SDreamLocPretranslateDialog>(Open->GetContent());
 	}
-	const bool bSaved = DreamLocTranslateConfig::SaveProfiles(Values);
-	ProfilesText = bSaved ? FText::Format(LOCTEXT("ProfilesSaved", "Saved to {0}"), FText::FromString(DreamLocTranslateConfig::GetUserConfigPath()))
-		: FText::Format(LOCTEXT("ProfilesNotSaved", "{0} cannot be written"), FText::FromString(DreamLocTranslateConfig::GetUserConfigPath()));
-	RebuildProfileChoices();
-	RebuildSettingsChoices();
+	const TSharedRef<SDreamLocPretranslateDialog> Dialog = SNew(SDreamLocPretranslateDialog, SharedThis(this));
+	// Beside the review window, wherever that is, and as quiet as it is (a test keeps its windows off the screens, never activated).
+	const TSharedPtr<SWindow> Parent = FSlateApplication::Get().FindWidgetWindow(AsShared());
+	const bool bQuiet = Parent.IsValid() && Parent->ActivationPolicy() == EWindowActivationPolicy::Never;
+	const TSharedRef<SWindow> Window = SNew(SWindow)
+		.Title(LOCTEXT("PretranslateTitle", "AI pre-translate"))
+		.ClientSize(FVector2D(560.0, 480.0))
+		.SupportsMaximize(false)
+		.SupportsMinimize(false)
+		.ActivationPolicy(bQuiet ? EWindowActivationPolicy::Never : EWindowActivationPolicy::Always)
+		.FocusWhenFirstShown(!bQuiet)
+		[
+			Dialog
+		];
+	if (Parent.IsValid())
+	{
+		FSlateApplication::Get().AddWindowAsNativeChild(Window, Parent.ToSharedRef(), /*bShowImmediately*/ false);
+		const FVector2D Center = FVector2D(Parent->GetPositionInScreen()) + FVector2D(Parent->GetSizeInScreen()) * 0.5;
+		Window->MoveWindowTo(Center - FVector2D(Window->GetSizeInScreen()) * 0.5);
+		Window->ShowWindow();
+	}
+	else
+	{
+		FSlateApplication::Get().AddWindow(Window);
+	}
+	PretranslateWindow = Window;
+	return Dialog;
 }
 
-void SDreamLocTranslateWindow::TestProfile()
+// ---------------------------------------------------------------------------------------------------------- candidates
+
+FString SDreamLocTranslateWindow::CandidateKey(const FDreamLocReviewEntry& InEntry) const
 {
-	const FDreamLocTranslateProfile* Selected = GetSelectedProfile();
-	if (Selected == nullptr)
+	FString Key = Culture;
+	Key.AppendChar(TCHAR(1));
+	Key += InEntry.GetId();
+	Key.AppendChar(TCHAR(1));
+	return Key + InEntry.Entry.Source;
+}
+
+TArray<FDreamLocCandidate> SDreamLocTranslateWindow::GetCandidates() const
+{
+	TArray<FDreamLocCandidate> Out;
+	if (!Current.IsValid())
 	{
-		return;
+		return Out;
 	}
-	const FDreamLocTranslateProfile Profile = *Selected;
-	const FString Source = Settings.SourceCulture;
-	const FString Target = AllCultures.Num() > 0 ? AllCultures[0] : FString(TEXT("en"));
-	TestText = FText::Format(LOCTEXT("Testing", "Testing {0}..."), FText::FromString(Profile.Name));
-	const TWeakPtr<SDreamLocTranslateWindow> Weak = SharedThis(this);
-	Async(EAsyncExecution::Thread, [Weak, Profile, Source, Target]()
+	auto Add = [&Out](FDreamLocCandidate InCandidate)
 	{
-		const double Started = FPlatformTime::Seconds();
-		const FDreamLocTranslateReply Reply = DreamLocTranslators::Ping(Profile, Source, Target);
-		const double Seconds = FPlatformTime::Seconds() - Started;
-		FString Said = Reply.bSucceeded ? Reply.Texts.FindRef(1) : Reply.Error;
-		for (const FString& Secret : Profile.GetSecrets())
+		const bool bHad = Out.ContainsByPredicate([&InCandidate](const FDreamLocCandidate& InHad) { return InHad.Text.Equals(InCandidate.Text, ESearchCase::CaseSensitive); });
+		if (!InCandidate.Text.IsEmpty() && !bHad)
 		{
-			Said.ReplaceInline(*Secret, TEXT("***"), ESearchCase::CaseSensitive);
+			Out.Add(MoveTemp(InCandidate));
 		}
-		const bool bSucceeded = Reply.bSucceeded;
-		AsyncTask(ENamedThreads::GameThread, [Weak, bSucceeded, Said, Seconds, Name = Profile.Name]()
+	};
+	if (const TArray<FDreamLocCandidate>* Found = Asked.Find(CandidateKey(*Current)))
+	{
+		for (const FDreamLocCandidate& Each : *Found)
 		{
-			if (const TSharedPtr<SDreamLocTranslateWindow> Window = Weak.Pin())
+			Add(Each);
+		}
+	}
+	for (const FString& Reviewed : Model.FindReviewed(Current->Entry.Source, Current.Get()))
+	{
+		Add({ Reviewed, LOCTEXT("ReviewedElsewhere", "Reviewed elsewhere").ToString(), FString() });
+	}
+	if (!Current->Reference.IsEmpty())
+	{
+		Add({ Current->Reference, FText::Format(LOCTEXT("ReferenceCandidate", "Reference {0}"), FText::FromString(ReferenceCulture)).ToString(), FString() });
+	}
+	return Out;
+}
+
+bool SDreamLocTranslateWindow::ApplyCandidate(int32 InIndex)
+{
+	const TArray<FDreamLocCandidate> Candidates = GetCandidates();
+	if (!Candidates.IsValidIndex(InIndex) || !Editor.IsValid())
+	{
+		return false;
+	}
+	Editor->SetText(Candidates[InIndex].Text);
+	return true;
+}
+
+bool SDreamLocTranslateWindow::MayGoTo(const FDreamLocReviewEntry& InEntry, const FString& InProfile) const
+{
+	const FDreamLocTranslateProfile* Found = DreamLocTranslateConfig::FindProfile(Profiles, InProfile);
+	return Found != nullptr && (Found->IsLocal() || !DreamLocTranslateFlow::IsLocalOnly(Settings.TranslateLocalOnly, InEntry.Entry.File, InEntry.Entry.Namespace));
+}
+
+TArray<FString> SDreamLocTranslateWindow::GetCandidateProfiles() const
+{
+	TArray<FString> Out;
+	for (const FDreamLocTranslateProfile& Each : Profiles)
+	{
+		if (Current.IsValid() && MayGoTo(*Current, Each.Name))
+		{
+			Out.Add(Each.Name);
+		}
+	}
+	return Out;
+}
+
+FString SDreamLocTranslateWindow::GetFixProfile() const
+{
+	if (!Current.IsValid())
+	{
+		return FString();
+	}
+	for (const FString& Name : { Profile, Settings.GetTranslateProfile(Culture), Settings.TranslateFallback })
+	{
+		const FDreamLocTranslateProfile* Found = Name.IsEmpty() ? nullptr : DreamLocTranslateConfig::FindProfile(Profiles, Name);
+		if (Found != nullptr && Found->GetKind() == EDreamLocTranslatorKind::LargeModel && MayGoTo(*Current, Name))
+		{
+			return Name;
+		}
+	}
+	return FString();
+}
+
+bool SDreamLocTranslateWindow::AskForCandidate(const FString& InProfile)
+{
+	return StartSuggestion(InProfile, InProfile, FString(), FString());
+}
+
+bool SDreamLocTranslateWindow::FixWithAI(const FString& InProblem)
+{
+	const FString Fixer = GetFixProfile();
+	const FString Problems = InProblem.IsEmpty() ? GetEditProblems() : InProblem;
+	if (Fixer.IsEmpty() || GetEditText().IsEmpty() || Problems.IsEmpty())
+	{
+		return false;
+	}
+	return StartSuggestion(Fixer, FText::Format(LOCTEXT("FixFrom", "AI fix ({0})"), FText::FromString(Fixer)).ToString(), GetEditText(), Problems);
+}
+
+bool SDreamLocTranslateWindow::StartSuggestion(const FString& InProfile, const FString& InFrom, const FString& InAmendText, const FString& InAmendProblems)
+{
+	if (!Current.IsValid() || IsRunning() || !MayGoTo(*Current, InProfile))
+	{
+		return false;
+	}
+	FDreamLocTranslateRequest Request = MakeEntriesRequest({ Current }, InProfile);
+	Request.bSuggest = true;
+	Request.bWrite = false;
+	Request.AmendText = InAmendText;
+	Request.AmendProblems = InAmendProblems;
+	const FString Key = CandidateKey(*Current);
+	const FString From = InFrom;
+	UE_LOG(LogDreamLocTranslate, Verbose, TEXT("asking %s for %s/%s %s%s"), *InProfile, *Culture, *Current->Entry.Namespace, *Current->Entry.Key,
+		InAmendText.IsEmpty() ? TEXT("") : TEXT(" (a fix)"));
+	// Called by OnRunFinished, on the window: it is there.
+	return StartRun(Request, [this, Key, From](const FDreamLocTranslateResult& InResult)
+	{
+		TArray<FString> Said;
+		for (const FDreamLocTranslateRow& Row : InResult.Rows)
+		{
+			const FString& Text = !Row.NewText.IsEmpty() ? Row.NewText : Row.RejectedText;
+			if (!Text.IsEmpty())
 			{
-				const FText Time = FText::AsNumber(FMath::RoundToDouble(Seconds * 100.0) / 100.0);
-				Window->TestText = bSucceeded
-					? FText::Format(LOCTEXT("TestPassed", "{0} answered in {1} s: \"{2}\""), FText::FromString(Name), Time, FText::FromString(Said))
-					: FText::Format(LOCTEXT("TestFailed", "{0} failed after {1} s: {2}"), FText::FromString(Name), Time, FText::FromString(Said));
+				Asked.FindOrAdd(Key).Add({ Text, From, Row.Problems });
 			}
-		});
+			else if (!Row.Reason.IsEmpty())
+			{
+				Said.Add(Row.Reason);
+			}
+		}
+		Said.Append(InResult.Errors);
+		StatusText = Said.IsEmpty() ? FText::Format(LOCTEXT("CandidateCame", "{0}: a candidate"), FText::FromString(From))
+			: FText::Format(LOCTEXT("CandidateFailed", "{0}: {1}"), FText::FromString(From), FText::FromString(FString::Join(Said, TEXT("; "))));
+		if (Editor.IsValid())
+		{
+			Editor->RebuildCandidates();
+		}
 	});
 }
 
-TSharedRef<SWidget> SDreamLocTranslateWindow::MakeProjectSettings()
-{
-	TSharedRef<SGridPanel> Grid = SNew(SGridPanel).FillColumn(1, 1.0f);
-	int32 RowIndex = 0;
-	auto AddRow = [&Grid, &RowIndex](const FText& InLabel, const FText& InTip, const TSharedRef<SWidget>& InEditor)
-	{
-		Grid->AddSlot(0, RowIndex).VAlign(VAlign_Top).Padding(0.0f, 4.0f, 8.0f, 2.0f)[SNew(STextBlock).Text(InLabel).ToolTipText(InTip)];
-		Grid->AddSlot(1, RowIndex).Padding(0.0f, 2.0f)[InEditor];
-		++RowIndex;
-	};
-	auto Choose = [this](TSharedPtr<SComboBox<TSharedPtr<FString>>>& OutCombo, TArray<TSharedPtr<FString>>* InChoices, TSharedPtr<FString>* InChoice) -> TSharedRef<SWidget>
-	{
-		return SNew(SBox).HAlign(HAlign_Left)
-		[
-			SAssignNew(OutCombo, SComboBox<TSharedPtr<FString>>)
-			.OptionsSource(InChoices)
-			.OnComboBoxOpening_Lambda([this]() { RebuildSettingsChoices(); })
-			.OnGenerateWidget_Lambda([this](TSharedPtr<FString> InItem) -> TSharedRef<SWidget> { return SNew(STextBlock).Text(SettingLabel(InItem)); })
-			.OnSelectionChanged_Lambda([InChoice](TSharedPtr<FString> InItem, ESelectInfo::Type)
-			{
-				if (InItem.IsValid())
-				{
-					*InChoice = InItem;
-				}
-			})
-			[
-				SNew(STextBlock).Text_Lambda([this, InChoice]() { return SettingLabel(*InChoice); })
-			]
-		];
-	};
-	AddRow(LOCTEXT("SettingProfile", "Translator"), LOCTEXT("SettingProfileTip", "[Translate] Profile: the profile used by default"),
-		Choose(SettingsProfileCombo, &SettingsProfileChoices, &SettingsProfileChoice));
-	AddRow(LOCTEXT("SettingByCulture", "Translator by culture"), LOCTEXT("SettingByCultureTip", "[Translate] Profile.<culture>: one line each, ja=deepl"),
-		SNew(SBox).MinDesiredHeight(44.0f)[SAssignNew(SettingsByCulture, SMultiLineEditableTextBox).HintText(LOCTEXT("ByCultureHint", "ja=deepl"))]);
-	AddRow(LOCTEXT("SettingFallback", "Fallback large model"), LOCTEXT("SettingFallbackTip", "[Translate] Fallback: what a machine translator cannot do goes to it"),
-		Choose(SettingsFallbackCombo, &SettingsFallbackChoices, &SettingsFallbackChoice));
-	AddRow(LOCTEXT("SettingBatchSize", "Entries per request"), LOCTEXT("SettingBatchSizeTip", "[Translate] BatchSize (default 40)"),
-		SAssignNew(SettingsBatchSize, SEditableTextBox));
-	AddRow(LOCTEXT("SettingConcurrency", "Requests at once"), LOCTEXT("SettingConcurrencyTip", "[Translate] Concurrency (default 2)"),
-		SAssignNew(SettingsConcurrency, SEditableTextBox));
-	AddRow(LOCTEXT("SettingRetry", "Tries after the checks"), LOCTEXT("SettingRetryTip", "[Translate] Retry: times a translation the checks turn down goes back to the large model (default 1)"),
-		SAssignNew(SettingsRetry, SEditableTextBox));
-	AddRow(LOCTEXT("SettingStyle", "Style guide"), LOCTEXT("SettingStyleTip", "[Translate] Style, relative to the project; DLoc/_style.<culture>.md wins when there is one"),
-		SAssignNew(SettingsStyle, SEditableTextBox));
-	AddRow(LOCTEXT("SettingLocalOnly", "Only to local translators"), LOCTEXT("SettingLocalOnlyTip", "[Translate] LocalOnly: file paths or namespaces, one a line"),
-		SNew(SBox).MinDesiredHeight(44.0f)[SAssignNew(SettingsLocalOnly, SMultiLineEditableTextBox).HintText(LOCTEXT("LocalOnlyHint", "DNA/"))]);
+// ---------------------------------------------------------------------------------------------------------- the overview
 
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
+TSharedRef<SWidget> SDreamLocTranslateWindow::MakeOverview()
+{
+	return SNew(SExpandableArea)
+		.InitiallyCollapsed(true)
+		// Opened at once: rows still sliding in under the mouse take a click meant for another.
+		.AllowAnimatedTransition(false)
+		.BorderImage(FAppStyle::GetBrush(TEXT("NoBorder")))
+		.HeaderContent()
 		[
-			SNew(STextBlock).Font(FAppStyle::GetFontStyle(TEXT("NormalFontBold"))).Text(LOCTEXT("ProjectSettings", "This project (dloc.ini [Translate])"))
+			SNew(STextBlock)
+			.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Overview")))
+			.Text(LOCTEXT("Overview", "Every culture"))
 		]
-		+ SVerticalBox::Slot().AutoHeight()[Grid]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f)
+		.OnAreaExpansionChanged_Lambda([this](bool bInOpen) { SetOverviewOpen(bInOpen); })
+		.BodyContent()
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 8.0f, 0.0f)
-			[
-				SNew(SButton).Text(LOCTEXT("SaveSettings", "Save to dloc.ini")).OnClicked_Lambda([this]() { SaveProjectSettings(); return FReply::Handled(); })
-			]
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
-			[
-				SNew(STextBlock).Text_Lambda([this]() { return SettingsText; }).AutoWrapText(true)
-			]
+			SAssignNew(OverviewBox, SVerticalBox)
 		];
 }
 
-FText SDreamLocTranslateWindow::SettingLabel(const TSharedPtr<FString>& InChoice) const
+void SDreamLocTranslateWindow::SetOverviewOpen(bool bInOpen)
 {
-	return InChoice.IsValid() && !InChoice->IsEmpty() ? ProfileLabel(*InChoice) : LOCTEXT("NoProfileSetting", "(none)");
+	bOverviewOpen = bInOpen;
+	RebuildOverview();
 }
 
-void SDreamLocTranslateWindow::RebuildSettingsChoices()
+void SDreamLocTranslateWindow::SetOverviewFilesShown(const FString& InCulture, bool bInShown)
 {
-	const FString Profile = SettingsProfileChoice.IsValid() ? *SettingsProfileChoice : Settings.TranslateProfile;
-	const FString Fallback = SettingsFallbackChoice.IsValid() ? *SettingsFallbackChoice : Settings.TranslateFallback;
-	auto Build = [this](TArray<TSharedPtr<FString>>& OutChoices, bool bInLargeModelsOnly, const FString& InChosen)
+	if (bInShown)
 	{
-		OutChoices.Reset();
-		OutChoices.Add(MakeShared<FString>());
-		TSharedPtr<FString> Chosen = OutChoices[0];
-		for (const TSharedPtr<FDreamLocTranslateProfile>& Item : ProfileItems)
-		{
-			if (!Item->Name.IsEmpty() && (!bInLargeModelsOnly || Item->GetKind() == EDreamLocTranslatorKind::LargeModel))
-			{
-				OutChoices.Add(MakeShared<FString>(Item->Name));
-				if (Item->Name == InChosen)
-				{
-					Chosen = OutChoices.Last();
-				}
-			}
-		}
-		// A name dloc.ini has and translators.ini does not: kept, so saving does not lose it.
-		if (!InChosen.IsEmpty() && Chosen == OutChoices[0])
-		{
-			OutChoices.Add(MakeShared<FString>(InChosen));
-			Chosen = OutChoices.Last();
-		}
-		return Chosen;
-	};
-	SettingsProfileChoice = Build(SettingsProfileChoices, /*bInLargeModelsOnly*/ false, Profile);
-	SettingsFallbackChoice = Build(SettingsFallbackChoices, /*bInLargeModelsOnly*/ true, Fallback);
-	for (const TPair<TSharedPtr<SComboBox<TSharedPtr<FString>>>, TSharedPtr<FString>>& Combo : {
-		TPair<TSharedPtr<SComboBox<TSharedPtr<FString>>>, TSharedPtr<FString>>(SettingsProfileCombo, SettingsProfileChoice),
-		TPair<TSharedPtr<SComboBox<TSharedPtr<FString>>>, TSharedPtr<FString>>(SettingsFallbackCombo, SettingsFallbackChoice) })
-	{
-		if (Combo.Key.IsValid())
-		{
-			Combo.Key->RefreshOptions();
-			Combo.Key->SetSelectedItem(Combo.Value);
-		}
+		OverviewFilesShown.Add(InCulture);
 	}
+	else
+	{
+		OverviewFilesShown.Remove(InCulture);
+	}
+	RebuildOverview();
 }
 
-void SDreamLocTranslateWindow::LoadProjectSettings()
+void SDreamLocTranslateWindow::RebuildOverview()
 {
-	if (!SettingsBatchSize.IsValid())
+	if (!OverviewBox.IsValid())
 	{
 		return;
 	}
-	SettingsProfileChoice.Reset();
-	SettingsFallbackChoice.Reset();
-	RebuildSettingsChoices();
-	SettingsBatchSize->SetText(FText::AsNumber(Settings.TranslateBatchSize, &FNumberFormattingOptions::DefaultNoGrouping()));
-	SettingsConcurrency->SetText(FText::AsNumber(Settings.TranslateConcurrency, &FNumberFormattingOptions::DefaultNoGrouping()));
-	SettingsRetry->SetText(FText::AsNumber(Settings.TranslateRetry, &FNumberFormattingOptions::DefaultNoGrouping()));
-	SettingsStyle->SetText(FText::FromString(Settings.TranslateStyle));
-	TArray<FString> Lines;
-	for (const TPair<FString, FString>& Culture : Settings.TranslateProfileByCulture)
+	if (!bOverviewOpen)
 	{
-		Lines.Add(Culture.Key + TEXT("=") + Culture.Value);
+		OverviewBox->ClearChildren();
+		OverviewShown.Reset();
+		return;
 	}
-	SettingsByCulture->SetText(FText::FromString(FString::Join(Lines, TEXT("\n"))));
-	SettingsLocalOnly->SetText(FText::FromString(FString::Join(Settings.TranslateLocalOnly, TEXT("\n"))));
+	Overview = FDreamLocReviewModel::Overview(DLocDirectory);
+	// Built again only when what it shows changed: the files are read again often (the window's own writes too), and a
+	// row built again under the mouse takes the click it was in the middle of.
+	FString Shows = FString::Join(OverviewFilesShown.Array(), TEXT(","));
+	auto Describe = [](const FDreamLocReviewProgress& InProgress)
+	{
+		return FString::Printf(TEXT("%d/%d/%d/%d"), InProgress.Done, InProgress.Review, InProgress.Stale, InProgress.Untranslated);
+	};
+	for (const FDreamLocCultureProgress& Each : Overview)
+	{
+		Shows += TEXT("|") + Each.Culture + TEXT(" ") + Describe(Each.Total);
+		for (const TPair<FString, FDreamLocReviewProgress>& Part : Each.Files)
+		{
+			Shows += TEXT(";") + Part.Key + TEXT(" ") + Describe(Part.Value);
+		}
+	}
+	if (Shows == OverviewShown && OverviewBox->NumSlots() > 0)
+	{
+		return;
+	}
+	OverviewShown = Shows;
+	OverviewBox->ClearChildren();
+	for (const FDreamLocCultureProgress& Each : Overview)
+	{
+		OverviewBox->AddSlot().AutoHeight().Padding(0.0f, 1.0f)[MakeProgressRow(Each.Culture, FString(), Each.Total, true)];
+		if (OverviewFilesShown.Contains(Each.Culture))
+		{
+			for (const TPair<FString, FDreamLocReviewProgress>& Each2 : Each.Files)
+			{
+				OverviewBox->AddSlot().AutoHeight().Padding(18.0f, 1.0f, 0.0f, 1.0f)[MakeProgressRow(Each.Culture, Each2.Key, Each2.Value, false)];
+			}
+		}
+	}
 }
 
-void SDreamLocTranslateWindow::SaveProjectSettings()
+TSharedRef<SWidget> SDreamLocTranslateWindow::MakeProgressRow(const FString& InCulture, const FString& InFile, const FDreamLocReviewProgress& InProgress, bool bInCultureRow)
 {
-	FDreamLocSettings Changed = Settings;
-	Changed.TranslateProfile = SettingsProfileChoice.IsValid() ? *SettingsProfileChoice : FString();
-	Changed.TranslateFallback = SettingsFallbackChoice.IsValid() ? *SettingsFallbackChoice : FString();
-	Changed.TranslateStyle = SettingsStyle->GetText().ToString().TrimStartAndEnd();
-	struct FNumber
+	using namespace DreamLocTranslateWindowLocal;
+	TSharedRef<SHorizontalBox> Bar = SNew(SHorizontalBox);
+	const FString Where = InFile.IsEmpty() ? InCulture : InCulture + TEXT(".") + InFile;
+	struct FSegment
 	{
-		SEditableTextBox* Box;
-		int32* Value;
-		int32 Least;
+		int32 Count;
+		EDreamLocReviewStatus Status;
+		EDreamLocReviewFilter Filter;
 	};
-	const FNumber Numbers[] = {
-		{ SettingsBatchSize.Get(), &Changed.TranslateBatchSize, 1 }, { SettingsConcurrency.Get(), &Changed.TranslateConcurrency, 1 },
-		{ SettingsRetry.Get(), &Changed.TranslateRetry, 0 } };
-	for (const FNumber& Number : Numbers)
+	const FSegment Segments[] = { { InProgress.Done, EDreamLocReviewStatus::Done, EDreamLocReviewFilter::Done },
+		{ InProgress.Review, EDreamLocReviewStatus::Review, EDreamLocReviewFilter::Review }, { InProgress.Stale, EDreamLocReviewStatus::Stale, EDreamLocReviewFilter::Stale },
+		{ InProgress.Untranslated, EDreamLocReviewStatus::Untranslated, EDreamLocReviewFilter::Untranslated } };
+	for (const FSegment& Segment : Segments)
 	{
-		const FString Text = Number.Box->GetText().ToString().TrimStartAndEnd();
-		int32 Value = 0;
-		if (!Text.IsNumeric() || !LexTryParseString(Value, *Text) || Value < Number.Least)
-		{
-			SettingsText = FText::Format(LOCTEXT("BadNumber", "Not saved: '{0}' is not a whole number of {1} or more."), FText::FromString(Text), Number.Least);
-			return;
-		}
-		*Number.Value = Value;
-	}
-	TArray<FString> Lines;
-	SettingsByCulture->GetText().ToString().ParseIntoArrayLines(Lines);
-	Changed.TranslateProfileByCulture.Reset();
-	for (const FString& Line : Lines)
-	{
-		FString Culture;
-		FString Profile;
-		if (Line.TrimStartAndEnd().IsEmpty())
+		if (Segment.Count <= 0)
 		{
 			continue;
 		}
-		if (!Line.Split(TEXT("="), &Culture, &Profile) || Culture.TrimStartAndEnd().IsEmpty() || Profile.TrimStartAndEnd().IsEmpty())
-		{
-			SettingsText = FText::Format(LOCTEXT("BadByCulture", "Not saved: '{0}' is not culture=profile."), FText::FromString(Line));
-			return;
-		}
-		Changed.TranslateProfileByCulture.Emplace(Culture.TrimStartAndEnd(), Profile.TrimStartAndEnd());
+		const EDreamLocReviewFilter Chosen = Segment.Filter;
+		const FLinearColor Color = Segment.Status == EDreamLocReviewStatus::Untranslated ? FLinearColor(0.3f, 0.3f, 0.3f) : DotColor(Segment.Status);
+		Bar->AddSlot().FillWidth(float(Segment.Count))
+		[
+			SNew(SButton)
+			.AddMetaData<FTagMetaData>(FTagMetaData(*FString::Printf(TEXT("DreamLocTranslate.Overview.%s.%s"), *Where, *FilterName(Chosen).ToString())))
+			.ButtonStyle(FAppStyle::Get(), TEXT("NoBorder"))
+			.ContentPadding(FMargin(0.0f, 0.0f, 1.0f, 0.0f))
+			.ToolTipText(FText::Format(LOCTEXT("SegmentTip", "{0}: {1}"), FilterName(Chosen), Segment.Count))
+			.OnClicked_Lambda([this, InCulture, InFile, Chosen]()
+			{
+				SetCulture(InCulture);
+				SetFile(InFile);
+				SetFilter(Chosen);
+				return FReply::Handled();
+			})
+			[
+				SNew(SBorder)
+				.BorderImage(FAppStyle::GetBrush(TEXT("WhiteBrush")))
+				.BorderBackgroundColor(Color)
+				.Padding(0.0f)
+				[
+					SNew(SBox).HeightOverride(10.0f)
+				]
+			]
+		];
 	}
-	SettingsLocalOnly->GetText().ToString().ParseIntoArrayLines(Lines);
-	Changed.TranslateLocalOnly.Reset();
-	for (const FString& Line : Lines)
+	FFormatNamedArguments Args;
+	Args.Add(TEXT("Done"), InProgress.Done);
+	Args.Add(TEXT("Total"), InProgress.Total());
+	Args.Add(TEXT("Review"), InProgress.Review);
+	Args.Add(TEXT("Stale"), InProgress.Stale);
+	Args.Add(TEXT("Untranslated"), InProgress.Untranslated);
+	const bool bFilesShown = OverviewFilesShown.Contains(InCulture);
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SBox).WidthOverride(18.0f)
+			[
+				!bInCultureRow ? SNullWidget::NullWidget :
+				SNew(SButton)
+				.AddMetaData<FTagMetaData>(FTagMetaData(*(TEXT("DreamLocTranslate.OverviewFiles.") + InCulture)))
+				.ButtonStyle(FAppStyle::Get(), TEXT("SimpleButton"))
+				.ContentPadding(0.0f)
+				.ToolTipText(LOCTEXT("OverviewFilesTip", "Its files"))
+				.OnClicked_Lambda([this, InCulture, bFilesShown]() { SetOverviewFilesShown(InCulture, !bFilesShown); return FReply::Handled(); })
+				[
+					SNew(SImage).Image(FAppStyle::GetBrush(bFilesShown ? TEXT("TreeArrow_Expanded") : TEXT("TreeArrow_Collapsed")))
+				]
+			]
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 8.0f, 0.0f)
+		[
+			SNew(SBox).WidthOverride(bInCultureRow ? 90.0f : 160.0f)
+			[
+				SNew(STextBlock).Text(FText::FromString(bInCultureRow ? InCulture : InFile))
+			]
+		]
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)[Bar]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(STextBlock)
+			.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+			.Text(FText::Format(LOCTEXT("OverviewCounts", "{Done}/{Total} reviewed, {Review} to review, {Stale} stale, {Untranslated} untranslated"), Args))
+		];
+}
+
+// ---------------------------------------------------------------------------------------------------------- the files
+
+void SDreamLocTranslateWindow::WatchDirectory()
+{
+	FDirectoryWatcherModule& Module = FModuleManager::LoadModuleChecked<FDirectoryWatcherModule>(TEXT("DirectoryWatcher"));
+	IDirectoryWatcher* Watcher = Module.Get();
+	if (Watcher == nullptr || DLocDirectory.IsEmpty() || !IFileManager::Get().DirectoryExists(*DLocDirectory))
 	{
-		if (!Line.TrimStartAndEnd().IsEmpty())
-		{
-			Changed.TranslateLocalOnly.Add(Line.TrimStartAndEnd());
-		}
-	}
-	const FString Path = DLocDirectory / FDreamLocSettings::FileName;
-	FString Text;
-	FFileHelper::LoadFileToString(Text, *Path);
-	IFileManager::Get().MakeDirectory(*DLocDirectory, /*Tree*/ true);
-	if (!FFileHelper::SaveStringToFile(DreamLocTranslateConfig::WriteTranslateSection(Text, Changed), *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-	{
-		SettingsText = FText::Format(LOCTEXT("SettingsNotSaved", "{0} cannot be written"), FText::FromString(Path));
 		return;
 	}
-	Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
-	SettingsText = FText::Format(LOCTEXT("SettingsSaved", "Saved to {0}"), FText::FromString(Path));
+	const TWeakPtr<SDreamLocTranslateWindow> Weak = SharedThis(this);
+	if (Watcher->RegisterDirectoryChangedCallback_Handle(DLocDirectory, IDirectoryWatcher::FDirectoryChanged::CreateLambda([Weak](const TArray<FFileChangeData>& InChanges)
+	{
+		const TSharedPtr<SDreamLocTranslateWindow> Window = Weak.Pin();
+		if (!Window.IsValid())
+		{
+			return;
+		}
+		for (const FFileChangeData& Change : InChanges)
+		{
+			const FString Extension = FPaths::GetExtension(Change.Filename, /*bIncludeDot*/ true);
+			if (Extension.Equals(DreamLocFile::Extension, ESearchCase::IgnoreCase) || FPaths::GetCleanFilename(Change.Filename).Equals(FDreamLocSettings::FileName, ESearchCase::IgnoreCase))
+			{
+				// Read again once the changes stop for a moment.
+				Window->PendingReload = FPlatformTime::Seconds() + 0.3;
+				if (!Window->bReloadTimer)
+				{
+					Window->bReloadTimer = true;
+					Window->RegisterActiveTimer(0.1f, FWidgetActiveTimerDelegate::CreateSP(Window.ToSharedRef(), &SDreamLocTranslateWindow::ReloadWhenQuiet));
+				}
+				return;
+			}
+		}
+	}), WatchHandle, IDirectoryWatcher::WatchOptions::IncludeDirectoryChanges))
+	{
+		WatchedDirectory = DLocDirectory;
+	}
+}
+
+void SDreamLocTranslateWindow::UnwatchDirectory()
+{
+	if (WatchedDirectory.IsEmpty() || !FModuleManager::Get().IsModuleLoaded(TEXT("DirectoryWatcher")))
+	{
+		return;
+	}
+	if (IDirectoryWatcher* Watcher = FModuleManager::GetModuleChecked<FDirectoryWatcherModule>(TEXT("DirectoryWatcher")).Get())
+	{
+		Watcher->UnregisterDirectoryChangedCallback_Handle(WatchedDirectory, WatchHandle);
+	}
+	WatchedDirectory.Reset();
+}
+
+EActiveTimerReturnType SDreamLocTranslateWindow::ReloadWhenQuiet(double InCurrentTime, float InDeltaTime)
+{
+	if (FPlatformTime::Seconds() < PendingReload)
+	{
+		return EActiveTimerReturnType::Continue;
+	}
+	bReloadTimer = false;
+	Reload();
+	return EActiveTimerReturnType::Stop;
+}
+
+void SDreamLocTranslateWindow::OpenInFile(const TSharedPtr<FDreamLocReviewEntry>& InEntry) const
+{
+	if (!InEntry.IsValid())
+	{
+		return;
+	}
+	const FString Path = FPaths::ConvertRelativePathToFull(DLocDirectory / Culture / InEntry->Entry.File);
+	const int32 Line = DreamLocTranslateFlow::FindEntryLine(DLocDirectory, Culture, InEntry->Entry.File, InEntry->Entry.Namespace, InEntry->Entry.Key);
+	if (!FSourceCodeNavigation::OpenSourceFile(Path, FMath::Max(1, Line), 1))
+	{
+		FPlatformProcess::LaunchFileInDefaultExternalApplication(*Path);
+	}
+}
+
+void SDreamLocTranslateWindow::OpenSource(const TSharedPtr<FDreamLocReviewEntry>& InEntry) const
+{
+	if (!InEntry.IsValid() || InEntry->Entry.At.IsEmpty())
+	{
+		return;
+	}
+	const FString Source = DreamLocExtract::GetAtSource(InEntry->Entry.At);
+	// An asset (/Game/...) opens in its editor; a file (a .dui, a .dna, C++) in the code editor.
+	if (Source.StartsWith(TEXT("/")))
+	{
+		if (UObject* Asset = FSoftObjectPath(Source).TryLoad(); Asset != nullptr && GEditor != nullptr)
+		{
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Asset);
+		}
+		return;
+	}
+	const FString Path = FPaths::ConvertRelativePathToFull(OwnerDirectory / Source);
+	if (!FSourceCodeNavigation::OpenSourceFile(Path, 1, 1))
+	{
+		FPlatformProcess::LaunchFileInDefaultExternalApplication(*Path);
+	}
 }
 
 #undef LOCTEXT_NAMESPACE
