@@ -799,6 +799,30 @@ bool SDreamLocTranslateWindow::Select(const FString& InNamespace, const FString&
 	return true;
 }
 
+bool SDreamLocTranslateWindow::SelectInAnyCulture(const FString& InNamespace, const FString& InKey)
+{
+	if (Select(InNamespace, InKey))
+	{
+		return true;
+	}
+	// A text the culture under review does not have yet: another one may, and that is where to look at it.
+	for (const FString& Each : Settings.TargetCultures)
+	{
+		if (Each == Culture)
+		{
+			continue;
+		}
+		FDreamLocReviewModel Probe;
+		Probe.Load(DLocDirectory, OwnerDirectory, Each);
+		if (Probe.Find(InNamespace, InKey).IsValid())
+		{
+			SetCulture(Each);
+			return Select(InNamespace, InKey);
+		}
+	}
+	return false;
+}
+
 FText SDreamLocTranslateWindow::FilterLabel(EDreamLocReviewFilter InFilter) const
 {
 	return FText::Format(LOCTEXT("FilterLabel", "{0} {1}"), DreamLocTranslateWindowLocal::FilterName(InFilter), Model.Count(InFilter, Search, File));

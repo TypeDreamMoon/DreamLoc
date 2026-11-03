@@ -1219,6 +1219,11 @@ bool FDreamLocTranslateCultureListTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("a culture chosen from the list"), D->Window->GetCulture(), TEXT("ja"));
 		TestEqual(TEXT("its entries shown"), Keys(D->Window->GetShown()), TEXT("Quit"));
 		FSlateApplication::Get().DismissAllMenus();
+		// What in-context does with an entry the culture shown lacks: the culture that has it.
+		TestTrue(TEXT("an entry only en has"), D->Window->SelectInAnyCulture(TEXT("Menu"), TEXT("Start")));
+		TestEqual(TEXT("the window goes to en"), D->Window->GetCulture() + TEXT(" ") + CurrentKey(*D->Window), TEXT("en Start"));
+		TestFalse(TEXT("one no culture has"), D->Window->SelectInAnyCulture(TEXT("Menu"), TEXT("Nothing")));
+		TestEqual(TEXT("and the window stays"), D->Window->GetCulture(), TEXT("en"));
 	});
 	AddEnd(Steps, D);
 	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));

@@ -349,10 +349,10 @@ void DreamLocInContext::Pick(const FFound& InFound)
 		ShowHint(LOCTEXT("NoWindow", "The translation window did not open").ToString(), InFound);
 		return;
 	}
-	if (!Window->Select(InFound.Namespace, InFound.Key))
+	if (!Window->SelectInAnyCulture(InFound.Namespace, InFound.Key))
 	{
-		ShowHint(FText::Format(LOCTEXT("NotInDLoc", "{0} / {1} is not in DLoc/{2}: dloc gather (or sync) brings the project's texts there"),
-			FText::FromString(InFound.Namespace), FText::FromString(InFound.Key), FText::FromString(Window->GetCulture())).ToString(), InFound);
+		ShowHint(FText::Format(LOCTEXT("NotInDLoc", "{0} / {1} is in no culture's .dloc files: dloc gather (or sync) brings the project's texts there"),
+			FText::FromString(InFound.Namespace), FText::FromString(InFound.Key)).ToString(), InFound);
 	}
 }
 

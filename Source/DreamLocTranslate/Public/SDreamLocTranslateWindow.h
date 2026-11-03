@@ -74,6 +74,8 @@ public:
 	TSharedPtr<FDreamLocReviewEntry> GetCurrent() const { return Current; }
 	/** Chooses an entry; one the filter hides makes the filter All. False when the culture has no such entry. */
 	bool Select(const FString& InNamespace, const FString& InKey);
+	/** Select in the culture shown, else in the first other target culture that has the entry (the window goes there). False when none has it. */
+	bool SelectInAnyCulture(const FString& InNamespace, const FString& InKey);
 
 	/** The editor's translation box, as typed so far. */
 	FString GetEditText() const;
