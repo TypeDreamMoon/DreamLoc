@@ -27,4 +27,8 @@ namespace DreamLocTranslateWindow
 
 	/** Opens the window (or brings it forward); the window, or null when the tab could not be opened. */
 	DREAMLOCTRANSLATE_API TSharedPtr<SDreamLocTranslateWindow> Open();
+
+	/** The translators' page: Editor Preferences > Plugins > DreamLoc translators. */
+	DREAMLOCTRANSLATE_API FName GetTranslatorsSettingsName();
+	DREAMLOCTRANSLATE_API void OpenTranslatorsSettings();
 }

@@ -231,7 +231,7 @@ TArray<FDreamLocTranslateProfile> DreamLocTranslateConfig::ParseProfiles(const F
 
 FString DreamLocTranslateConfig::WriteProfiles(TConstArrayView<FDreamLocTranslateProfile> InProfiles)
 {
-	FString Out = TEXT("; DreamLoc's translators: shared by every project, never in a repository. Written by the editor's translation window.\n");
+	FString Out = TEXT("; DreamLoc's translators: shared by every project, never in a repository. Written by Editor Preferences > Plugins > DreamLoc translators.\n");
 	auto Add = [&Out](const TCHAR* InKey, const FString& InValue)
 	{
 		if (!InValue.IsEmpty())

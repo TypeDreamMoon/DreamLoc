@@ -13,6 +13,6 @@ public class DreamLocTranslate : ModuleRules
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "DreamLoc", "DreamLocEditor", "Slate", "SlateCore" });
-		PrivateDependencyModuleNames.AddRange(new string[] { "ApplicationCore", "DirectoryWatcher", "Engine", "HTTP", "Json", "Projects", "InputCore", "UnrealEd", "ToolMenus" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "ApplicationCore", "DirectoryWatcher", "Engine", "HTTP", "Json", "Projects", "InputCore", "Settings", "UnrealEd", "ToolMenus" });
 	}
 }

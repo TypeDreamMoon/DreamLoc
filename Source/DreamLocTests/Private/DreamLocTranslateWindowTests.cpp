@@ -12,6 +12,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Layout/WidgetPath.h"
 #include "SDreamLocPretranslateDialog.h"
+#include "SDreamLocTranslateSettings.h"
 #include "SDreamLocTranslateWindow.h"
 #include "Types/ISlateMetaData.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -860,6 +861,143 @@ bool FDreamLocTranslateAssistTest::RunTest(const FString& Parameters)
 	{
 		IModularFeatures::Get().UnregisterModularFeature(IDreamLocContextProvider::GetModularFeatureName(), &Fit.Get());
 		return true;
+	});
+	AddEnd(Steps, D);
+	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
+namespace DreamLocTranslateWindowTestsLocal
+{
+	/** The user's keyboard focus on a tagged widget, and everything in it selected (Ctrl+A): what typing then replaces. */
+	void AddFocusAll(FAutomationTestBase& InTest, TArray<TFunction<bool()>>& OutSteps, const FDeskRef& InDesk, const TCHAR* InTag)
+	{
+		FAutomationTestBase* Test = &InTest;
+		OutSteps.Add([Test, InDesk, InTag]()
+		{
+			if (InDesk->bFailed)
+			{
+				return true;
+			}
+			Paint(InDesk->Host.ToSharedRef());
+			const TSharedPtr<SWidget> Found = InDesk->Tagged(InTag);
+			if (!Found.IsValid())
+			{
+				Test->AddError(FString::Printf(TEXT("no %s"), InTag));
+				InDesk->bFailed = true;
+				return true;
+			}
+			FSlateApplication::Get().SetUserFocus(InDesk->User->GetUserIndex(), Found, EFocusCause::Mouse);
+			return true;
+		});
+		AddKey(OutSteps, InDesk, EKeys::A, /*bInControl*/ true);
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslatorSettingsTest, "DreamLoc.Translate.Settings.TheTranslatorsPageReadsAndWritesTranslatorsIni",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslatorSettingsTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("TranslatorSettings")))
+	{
+		return false;
+	}
+	TestTrue(TEXT("the profiles saved where the test says"), DreamLocTranslateConfig::SaveProfiles({ S->Fake->Profile(TEXT("OpenAI"), TEXT("model")) }));
+	const TSharedRef<SDreamLocTranslatorSettings> Page = SNew(SDreamLocTranslatorSettings);
+	const FDeskRef D = MakeDeskWith(S, Page);
+	const FString Path = DreamLocTranslateConfig::GetUserConfigPath();
+	TestTrue(TEXT("the file is the test's"), Path.StartsWith(S->Root));
+	TArray<TFunction<bool()>> Steps;
+	AddCheck(Steps, D, [this, Page]()
+	{
+		TestEqual(TEXT("the translators read"), Page->GetProfiles().Num() == 1 ? Page->GetProfiles()[0]->Name : FString(), TEXT("model"));
+		TestFalse(TEXT("nothing to save"), Page->IsDirty());
+	});
+	AddClick(*this, Steps, D, TEXT("Add"), [D]() { return D->Tagged(TEXT("DreamLocSettings.Add")); });
+	AddFocusAll(*this, Steps, D, TEXT("DreamLocSettings.Field.BaseUrl"));
+	AddType(Steps, D, TEXT("http://127.0.0.1:9/v1"));
+	AddCheck(Steps, D, [this, Page]()
+	{
+		TestEqual(TEXT("a new one, typed into"), Page->GetProfiles().Num() == 2 ? Page->GetProfiles()[1]->Name + TEXT(" ") + Page->GetProfiles()[1]->BaseUrl : FString(),
+			TEXT("profile2 http://127.0.0.1:9/v1"));
+		TestTrue(TEXT("to save"), Page->IsDirty());
+	});
+	AddClick(*this, Steps, D, TEXT("Save"), [D]() { return D->Tagged(TEXT("DreamLocSettings.Save")); });
+	AddCheck(Steps, D, [this, Path]()
+	{
+		FString Text;
+		FFileHelper::LoadFileToString(Text, *Path);
+		TestTrue(TEXT("written to translators.ini"), Text.Contains(TEXT("[Profile profile2]\nType=OpenAI\nBaseUrl=http://127.0.0.1:9/v1\n")));
+		TestEqual(TEXT("both there"), ProfileNames(DreamLocTranslateConfig::LoadProfiles()), TEXT("model,profile2"));
+	});
+	// Test: the smallest request, to the fake service.
+	AddClick(*this, Steps, D, TEXT("model's row"), [D]() { return D->Tagged(TEXT("DreamLocSettings.Profile.model")); });
+	AddClick(*this, Steps, D, TEXT("Test"), [D]() { return D->Tagged(TEXT("DreamLocSettings.Test")); });
+	AddWait(*this, Steps, D, TEXT("the test's answer"), 30.0, [Page]() { return !Page->GetTestText().ToString().StartsWith(TEXT("Testing")) && !Page->GetTestText().IsEmpty(); });
+	AddCheck(Steps, D, [this, Page]() { TestTrue(FString::Printf(TEXT("it answered (%s)"), *Page->GetTestText().ToString()), Page->GetTestText().ToString().StartsWith(TEXT("model answered"))); });
+	// Delete, saved.
+	AddClick(*this, Steps, D, TEXT("profile2's row"), [D]() { return D->Tagged(TEXT("DreamLocSettings.Profile.profile2")); });
+	AddClick(*this, Steps, D, TEXT("Delete"), [D]() { return D->Tagged(TEXT("DreamLocSettings.Delete")); });
+	AddClick(*this, Steps, D, TEXT("Save"), [D]() { return D->Tagged(TEXT("DreamLocSettings.Save")); });
+	AddCheck(Steps, D, [this, S]()
+	{
+		TestEqual(TEXT("deleted from the file"), ProfileNames(DreamLocTranslateConfig::LoadProfiles()), TEXT("model"));
+		// Changed elsewhere: the page follows.
+		DreamLocTranslateConfig::SaveProfiles({ S->Fake->Profile(TEXT("OpenAI"), TEXT("model")), S->Fake->Profile(TEXT("DeepL"), TEXT("deepl")) });
+	});
+	AddWait(*this, Steps, D, TEXT("the page reading the file changed elsewhere"), 15.0, [Page]() { return Page->GetProfiles().Num() == 2; });
+	AddEnd(Steps, D);
+	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocProjectSettingsTest, "DreamLoc.Translate.Settings.TheProjectPageWritesOnlyWhatChanged",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocProjectSettingsTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("ProjectSettings")))
+	{
+		return false;
+	}
+	TestTrue(TEXT("the profiles saved where the test says"), DreamLocTranslateConfig::SaveProfiles({ S->Fake->Profile(TEXT("OpenAI"), TEXT("model")) }));
+	const FString Before = TEXT("[DreamLoc]\nSourceCulture=zh-Hans\nTargetCultures=en\n\n[Translate]\n; the team's translator\nProfile=model\nBatchSize=20\n; keep the plot local\nLocalOnly=Secret/\n");
+	S->Write(TEXT("dloc.ini"), Before);
+	const TSharedRef<SDreamLocProjectTranslateSettings> Page = SNew(SDreamLocProjectTranslateSettings).DLocDirectory(S->DLoc);
+	const FDeskRef D = MakeDeskWith(S, Page);
+	TArray<TFunction<bool()>> Steps;
+	AddCheck(Steps, D, [this, D]()
+	{
+		TestEqual(TEXT("BatchSize read"), TextOf(D->Tagged(TEXT("DreamLocProjectSettings.BatchSize"))), TEXT("20"));
+		TestEqual(TEXT("Concurrency: its default"), TextOf(D->Tagged(TEXT("DreamLocProjectSettings.Concurrency"))), TEXT("2"));
+	});
+	AddFocusAll(*this, Steps, D, TEXT("DreamLocProjectSettings.Concurrency"));
+	AddType(Steps, D, TEXT("3"));
+	AddClick(*this, Steps, D, TEXT("Save"), [D]() { return D->Tagged(TEXT("DreamLocProjectSettings.Save")); });
+	AddCheck(Steps, D, [this, S, Page]()
+	{
+		TestEqual(TEXT("one key added; the comments, the order, the rest as they were"), S->Read(TEXT("dloc.ini")),
+			TEXT("[DreamLoc]\nSourceCulture=zh-Hans\nTargetCultures=en\n\n[Translate]\n; the team's translator\nProfile=model\nBatchSize=20\n; keep the plot local\nLocalOnly=Secret/\nConcurrency=3\n"));
+		TestTrue(TEXT("it says so"), Page->GetStatus().ToString().StartsWith(TEXT("Saved to")));
+	});
+	AddFocusAll(*this, Steps, D, TEXT("DreamLocProjectSettings.BatchSize"));
+	AddType(Steps, D, TEXT("40"));
+	AddClick(*this, Steps, D, TEXT("Save"), [D]() { return D->Tagged(TEXT("DreamLocProjectSettings.Save")); });
+	AddCheck(Steps, D, [this, S]()
+	{
+		TestEqual(TEXT("a key back to its default taken out, the rest left"), S->Read(TEXT("dloc.ini")),
+			TEXT("[DreamLoc]\nSourceCulture=zh-Hans\nTargetCultures=en\n\n[Translate]\n; the team's translator\nProfile=model\n; keep the plot local\nLocalOnly=Secret/\nConcurrency=3\n"));
+	});
+	AddFocusAll(*this, Steps, D, TEXT("DreamLocProjectSettings.Retry"));
+	AddType(Steps, D, TEXT("x"));
+	AddClick(*this, Steps, D, TEXT("Save"), [D]() { return D->Tagged(TEXT("DreamLocProjectSettings.Save")); });
+	AddCheck(Steps, D, [this, S, Page]()
+	{
+		TestEqual(TEXT("not a number: not saved"), Page->GetStatus().ToString(), TEXT("Not saved: 'x' is not a whole number of 0 or more."));
+		TestFalse(TEXT("the file as it was"), S->Read(TEXT("dloc.ini")).Contains(TEXT("Retry")));
 	});
 	AddEnd(Steps, D);
 	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));

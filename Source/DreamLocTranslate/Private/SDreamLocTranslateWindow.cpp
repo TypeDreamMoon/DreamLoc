@@ -10,6 +10,7 @@
 #include "DreamLocFile.h"
 #include "DreamLocTextSource.h"
 #include "DreamLocTranslateConfig.h"
+#include "DreamLocTranslateModule.h"
 #include "DreamLocTranslator.h"
 #include "Editor.h"
 #include "Framework/Application/SlateApplication.h"
@@ -332,6 +333,17 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 				Choices(ProfileCombo, &ProfileChoices, [this](const FString& InName) { return ProfileLabel(InName); },
 					[this](const FString& InName) { SetProfile(InName); }, [this]() { return Profile; }, TEXT("DreamLocTranslate.Profile"),
 					LOCTEXT("ProfileTip", "The translator for this window's actions"))
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			[
+				SNew(SButton)
+				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Settings")))
+				.ButtonStyle(FAppStyle::Get(), TEXT("SimpleButton"))
+				.ToolTipText(LOCTEXT("SettingsTip", "Your translators: Editor Preferences > Plugins > DreamLoc translators"))
+				.OnClicked_Lambda([]() { DreamLocTranslateWindow::OpenTranslatorsSettings(); return FReply::Handled(); })
+				[
+					SNew(SImage).Image(FAppStyle::GetBrush(TEXT("Icons.Settings"))).ColorAndOpacity(FSlateColor::UseForeground())
+				]
 			]
 			+ SHorizontalBox::Slot().AutoWidth()
 			[

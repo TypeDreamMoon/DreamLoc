@@ -5,7 +5,9 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
 #include "HttpModule.h"
+#include "ISettingsModule.h"
 #include "Modules/ModuleManager.h"
+#include "SDreamLocTranslateSettings.h"
 #include "SDreamLocTranslateWindow.h"
 #include "Styling/AppStyle.h"
 #include "ToolMenus.h"
@@ -35,6 +37,17 @@ public:
 				.SetMenuType(ETabSpawnerMenuType::Hidden);
 			// Without it a new window for the tab takes the tab manager's own default.
 			FTabManager::RegisterDefaultTabWindowSize(FTabId(DreamLocTranslateModuleLocal::TabName), DreamLocTranslateWindow::GetDefaultSize());
+			// The translators are the user's (translators.ini), the project's choice among them is dloc.ini's: each page
+			// reads and writes its own file, nothing goes to the engine's settings files.
+			if (ISettingsModule* Settings = FModuleManager::LoadModulePtr<ISettingsModule>(TEXT("Settings")))
+			{
+				Settings->RegisterSettings(TEXT("Editor"), TEXT("Plugins"), DreamLocTranslateWindow::GetTranslatorsSettingsName(),
+					LOCTEXT("TranslatorsSettings", "DreamLoc translators"),
+					LOCTEXT("TranslatorsSettingsTip", "The large models and machine translators DreamLoc can use, yours for every project (%APPDATA%/DreamLoc/translators.ini)"),
+					SNew(SDreamLocTranslatorSettings));
+				Settings->RegisterSettings(TEXT("Project"), TEXT("Plugins"), TEXT("DreamLoc"), LOCTEXT("ProjectSettings", "DreamLoc"),
+					LOCTEXT("ProjectSettingsTip", "How this project translates: dloc.ini's [Translate]"), SNew(SDreamLocProjectTranslateSettings));
+			}
 		}
 		UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FDreamLocTranslateModule::RegisterMenus));
 	}
@@ -50,6 +63,11 @@ public:
 		{
 			FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(DreamLocTranslateModuleLocal::TabName);
 			FTabManager::UnregisterDefaultTabWindowSize(FTabId(DreamLocTranslateModuleLocal::TabName));
+		}
+		if (ISettingsModule* Settings = FModuleManager::GetModulePtr<ISettingsModule>(TEXT("Settings")))
+		{
+			Settings->UnregisterSettings(TEXT("Editor"), TEXT("Plugins"), DreamLocTranslateWindow::GetTranslatorsSettingsName());
+			Settings->UnregisterSettings(TEXT("Project"), TEXT("Plugins"), TEXT("DreamLoc"));
 		}
 	}
 
@@ -83,6 +101,19 @@ private:
 FName DreamLocTranslateWindow::GetTabName()
 {
 	return DreamLocTranslateModuleLocal::TabName;
+}
+
+FName DreamLocTranslateWindow::GetTranslatorsSettingsName()
+{
+	return TEXT("DreamLocTranslators");
+}
+
+void DreamLocTranslateWindow::OpenTranslatorsSettings()
+{
+	if (ISettingsModule* Settings = FModuleManager::LoadModulePtr<ISettingsModule>(TEXT("Settings")))
+	{
+		Settings->ShowViewer(TEXT("Editor"), TEXT("Plugins"), GetTranslatorsSettingsName());
+	}
 }
 
 FVector2D DreamLocTranslateWindow::GetDefaultSize()
