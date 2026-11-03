@@ -165,6 +165,61 @@ pwsh -File Tools/dloc.ps1 check
 (a person reviews, fixes what check reports, and sets state done)
 ```
 
+## Translating in the editor
+
+Tools > DreamLoc > Translate does the same in one window. The **Translate** page picks the cultures, the files, which
+entries (untranslated, stale, machine translated) and the translator, shows an estimate (entries, characters, roughly
+the tokens, requests) and asks before it sends. What comes back is checked as `dloc check` checks it -- and, with
+DreamGUI, laid out where it shows (overflow, missing glyphs) -- and written as `state machine`; a reviewed translation
+(`state done`) is never touched, not even when its source has changed. The results table shows each entry's old and
+new translation, what the checks said and which translator did it; a row can be passed (`done`), rejected (cleared),
+edited (`draft`) or translated again, a double click opens the `.dloc` at the entry, and the machine translations
+already in the files load into it for review without a run. A report of each run goes to
+`Saved/DLoc/translate-<culture>-<time>.json`.
+
+Translators are set up once per user in `%APPDATA%/DreamLoc/translators.ini` (the **Translators** page edits it and
+tests each), never in the project, since keys live there:
+
+```ini
+[Profile deepseek]
+Type=OpenAI                     ; any OpenAI-compatible chat completions service
+BaseUrl=https://api.deepseek.com/v1
+Model=deepseek-chat
+ApiKeyEnv=DEEPSEEK_API_KEY      ; or ApiKey=..., which the window warns about
+JsonMode=true
+
+[Profile ollama]
+Type=OpenAI
+BaseUrl=http://127.0.0.1:11434/v1   ; a local address: a local translator
+Model=qwen3:14b
+
+[Profile deepl]
+Type=DeepL                      ; also Google, Baidu, Tencent, Youdao
+ApiKeyEnv=DEEPL_AUTH_KEY        ; a free key (ending :fx) goes to api-free.deepl.com
+Proxy=http://127.0.0.1:7890
+```
+
+The project's side is `dloc.ini [Translate]`: the translator by default and by culture, a `Fallback` large model for
+what a machine translator cannot do, batch size, requests at once, how often a translation the checks turn down goes
+back with what was wrong (`Retry`), a style guide (`DLoc/_style.md`, or `_style.<culture>.md`), and `LocalOnly`
+files or namespaces whose texts only go to a local translator. `DLoc/_prompt.md` adds to the plugin's instructions
+(`Resources/Prompts/translate.md`), or replaces them when its first line is `<!-- replace -->`.
+
+- A large model gets each entry with its note, `max`, kind and context, the texts around it, its terms, a stale
+  entry's old source and translation (to amend, not redo), and the culture's reviewed translation of the same
+  source as a reference. The same source and kind is sent once.
+- A machine translator gets the text alone, its arguments, tags, line breaks, terms and kept words swapped for
+  placeholders it leaves alone (DeepL an ignored XML tag, Google a `translate="no"` span, the others `⟦n⟧`) and put
+  back after; a placeholder that comes back lost, twice or changed fails the entry. Texts with plural, ordinal or
+  gender forms never go to one, nor does what it got wrong go back to it: both go to the `Fallback`, or stay
+  untranslated.
+- Network errors, 429 and 5xx are tried again three times, waiting longer each time; an answer that does not read is
+  asked for once more. Cancelling keeps what was translated by then. No key shows in a log, the window or a report.
+
+The window is a shell over `DreamLocTranslateFlow::Run`, which a command line could call the same way. The tests
+run it against fake services on 127.0.0.1 -- an OpenAI-compatible one and the five machine translators, each
+checking its key or signature -- and never touch the network or the user's `translators.ini`.
+
 ## Checks
 
 `dloc check` reports, as `<file>(<line>,<col>): error DLOCnnnn: ...`:
@@ -189,5 +244,6 @@ type (all but the plural forms and the project-wide ones) and `dloc check` on re
 
 Done: the file format, the text source, `dloc.ini`, hot reload in the editor, sync with key migration, the engine's
 gather and the import of its localization targets, the checks, bake with Source and Native shipping, mod layers,
-prune and freeze, and export / import for AI, XLIFF, PO and CSV. Still to come: DreamGUI's own checks (overflow and
+prune and freeze, export / import for AI, XLIFF, PO and CSV, and translation in the editor with large models and
+machine translators. Still to come: DreamGUI's own checks (overflow and
 missing glyphs measured in the real widget), and DreamNarrative.
