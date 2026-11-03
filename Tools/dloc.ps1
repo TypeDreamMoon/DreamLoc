@@ -265,6 +265,8 @@ function Invoke-Tests {
     $runDir = Join-Path $projectDir ('Saved\DreamLocTests\{0}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Force -Path $runDir | Out-Null
     $runLog = Join-Path $runDir 'run.log'
+    # The translation tests set their own translators.ini; this one catches anything else, so the user's is never read.
+    [Environment]::SetEnvironmentVariable('DREAMLOC_TRANSLATORS_INI', (Join-Path $runDir 'translators.ini'), 'Process')
     # No value may end in a backslash: the C runtime reads \" as a quote.
     $parts = @(
         "`"$uproject`"",
@@ -272,7 +274,9 @@ function Invoke-Tests {
         '-TestExit="Automation Test Queue Empty"',
         "-ReportExportPath=`"$($runDir.TrimEnd('\'))`"",
         "-abslog=`"$runLog`"",
-        '-unattended', '-nopause', '-nosplash', '-NoSound', '-nullrhi', '-NoLiveCoding'
+        '-unattended', '-nopause', '-nosplash', '-NoSound', '-nullrhi', '-NoLiveCoding',
+        # The editor's home screen checks the internet every few seconds; the tests stay off the network.
+        '-ini:Engine:[ConsoleVariables]:HomeScreen.EnableHomeScreen=0'
     )
     $argLine = $parts -join ' '
     Set-Content -LiteralPath (Join-Path $runDir 'command.txt') -Value "`"$editorCmd`" $argLine" -Encoding utf8
