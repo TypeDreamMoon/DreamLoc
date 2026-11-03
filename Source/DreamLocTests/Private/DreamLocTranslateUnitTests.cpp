@@ -206,7 +206,7 @@ x=1
 
 		TArray<FString> Again;
 		const TArray<FDreamLocTranslateProfile> Written = DreamLocTranslateConfig::ParseProfiles(DreamLocTranslateConfig::WriteProfiles(Profiles), Again);
-		TestEqual(TEXT("written and read again: no warning"), Again.Num(), 0);
+		TestEqual(TEXT("written and read again: only the kept unknown key (Colour) warns again"), Again.Num(), 1);
 		TestEqual(TEXT("written and read again: the same"), DreamLocTranslateConfig::WriteProfiles(Written), DreamLocTranslateConfig::WriteProfiles(Profiles));
 	}
 	FPlatformMisc::SetEnvironmentVar(TEXT("DREAMLOC_TEST_KEY"), TEXT(""));
@@ -227,6 +227,51 @@ x=1
 	TestFalse(TEXT("an OpenAI profile needs an address"), DreamLocTranslators::Make(FDreamLocTranslateProfile{ TEXT("x"), TEXT("OpenAI") }, MadeError).IsValid());
 	TestFalse(TEXT("an unknown type is no translator"), DreamLocTranslators::Make(FDreamLocTranslateProfile{ TEXT("x"), TEXT("Bing") }, MadeError).IsValid());
 	TestTrue(TEXT("and says which types there are"), MadeError.Contains(TEXT("Youdao")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateOtherToolsKeysTest, "DreamLoc.Translate.Config.KeysOfOtherToolsSurviveASave",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateOtherToolsKeysTest::RunTest(const FString& Parameters)
+{
+	// dreamdocs, the documentation translator, reads its profiles from this file too.
+	const FString Text = TEXT(R"([Profile deepseek]
+Type=OpenAI
+BaseUrl=https://api.deepseek.com/v1
+Model=deepseek-chat
+ApiKeyEnv=DEEPSEEK_API_KEY
+ExtraBody={"thinking": {"type": "disabled"}}
+Concurrency=3
+
+[Profile ocgo]
+Type=OpenCodeGo
+Model=deepseek-v4.1-flash
+ApiKeyEnv=OPENCODE_GO_API_KEY
+Temperature=0.1
+Api=chat
+Typo=1
+)");
+	TArray<FString> Warnings;
+	const TArray<FDreamLocTranslateProfile> Profiles = DreamLocTranslateConfig::ParseProfiles(Text, Warnings);
+	TestEqual(TEXT("two profiles"), Profiles.Num(), 2);
+	TestEqual(TEXT("only the typo warns: dreamdocs' keys are expected"), Warnings.Num(), 1);
+	if (Profiles.Num() != 2)
+	{
+		return false;
+	}
+	TestEqual(TEXT("its keys are kept in order"), Profiles[0].Others.Num(), 2);
+	const FString Written = DreamLocTranslateConfig::WriteProfiles(Profiles);
+	for (const TCHAR* Line : { TEXT("ExtraBody={\"thinking\": {\"type\": \"disabled\"}}"), TEXT("Concurrency=3"), TEXT("Type=OpenCodeGo"),
+		TEXT("Model=deepseek-v4.1-flash"), TEXT("Temperature=0.1"), TEXT("Api=chat"), TEXT("Typo=1") })
+	{
+		TestTrue(FString::Printf(TEXT("saving keeps %s"), Line), Written.Contains(FString(Line) + TEXT("\n")));
+	}
+	TArray<FString> Again;
+	TestEqual(TEXT("and reading it back gives the same file"),
+		DreamLocTranslateConfig::WriteProfiles(DreamLocTranslateConfig::ParseProfiles(Written, Again)), Written);
+	FString MadeError;
+	TestFalse(TEXT("an OpenCodeGo profile is listed, not used"), DreamLocTranslators::Make(Profiles[1], MadeError).IsValid());
+	TestTrue(TEXT("with a reason"), MadeError.Contains(TEXT("OpenCodeGo")));
 	return true;
 }
 

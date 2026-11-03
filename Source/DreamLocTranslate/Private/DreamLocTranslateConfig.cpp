@@ -34,6 +34,21 @@ namespace DreamLocTranslateConfigLocal
 		return Comment == INDEX_NONE ? Line : Line.Left(Comment);
 	}
 
+	/** Keys of dreamdocs, the documentation translator that reads profiles from the same file. */
+	bool IsDreamDocsKey(const FString& InKey)
+	{
+		static const TCHAR* const Keys[] = { TEXT("Api"), TEXT("MaxTokens"), TEXT("TokenField"), TEXT("ExtraBody"), TEXT("Headers"),
+			TEXT("Concurrency"), TEXT("Retry"), TEXT("ChunkChars"), TEXT("Timeout") };
+		for (const TCHAR* Key : Keys)
+		{
+			if (InKey.Equals(Key, ESearchCase::IgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	bool ParseBool(const FString& InValue, bool& OutValue)
 	{
 		if (InValue.Equals(TEXT("true"), ESearchCase::IgnoreCase) || InValue == TEXT("1") || InValue.Equals(TEXT("yes"), ESearchCase::IgnoreCase))
@@ -223,7 +238,12 @@ TArray<FDreamLocTranslateProfile> DreamLocTranslateConfig::ParseProfiles(const F
 		else if (Key == TEXT("Local") && ParseBool(Value, bValue)) { Current->Local = bValue; }
 		else
 		{
-			OutWarnings.Add(FString::Printf(TEXT("line %d: '%s' is not read"), Index + 1, *Key));
+			// Kept and written back as is. Keys the documentation translator reads are expected, not a typo.
+			Current->Others.Emplace(Key, Value);
+			if (!IsDreamDocsKey(Key))
+			{
+				OutWarnings.Add(FString::Printf(TEXT("line %d: '%s' is not read (kept as written)"), Index + 1, *Key));
+			}
 		}
 	}
 	return Profiles;
@@ -257,13 +277,18 @@ FString DreamLocTranslateConfig::WriteProfiles(TConstArrayView<FDreamLocTranslat
 		{
 			Add(TEXT("JsonMode"), TEXT("true"));
 		}
-		if (!FMath::IsNearlyEqual(Profile.Temperature, 0.2f) && Profile.GetKind() == EDreamLocTranslatorKind::LargeModel)
+		// Written whatever the type: a profile of another tool's type may carry one DreamLoc never uses.
+		if (!FMath::IsNearlyEqual(Profile.Temperature, 0.2f))
 		{
 			Add(TEXT("Temperature"), FString::SanitizeFloat(Profile.Temperature));
 		}
 		if (Profile.Local.IsSet())
 		{
 			Add(TEXT("Local"), Profile.Local.GetValue() ? TEXT("true") : TEXT("false"));
+		}
+		for (const TPair<FString, FString>& Other : Profile.Others)
+		{
+			Add(*Other.Key, Other.Value);
 		}
 	}
 	return Out;

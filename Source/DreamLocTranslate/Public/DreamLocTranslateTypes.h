@@ -29,6 +29,11 @@ enum class EDreamLocTranslatorKind : uint8
  *   JsonMode  ask for a JSON object (OpenAI response_format)
  *   Temperature (OpenAI, default 0.2)
  *   Local     true / false; unset: local when the address is localhost, 127.0.0.1, ::1 or a .local host
+ *
+ * Any other key is kept as written (Others) and written back, so saving never drops what another tool
+ * reads from the same file: dreamdocs, the documentation translator, adds Api, MaxTokens, TokenField,
+ * ExtraBody, Headers, Concurrency, Retry, ChunkChars and Timeout, and profiles of its own types
+ * (OpenCodeGo, Anthropic), which DreamLoc lists but cannot translate with.
  */
 struct DREAMLOCTRANSLATE_API FDreamLocTranslateProfile
 {
@@ -47,6 +52,8 @@ struct DREAMLOCTRANSLATE_API FDreamLocTranslateProfile
 	bool bJsonMode = false;
 	float Temperature = 0.2f;
 	TOptional<bool> Local;
+	/** Keys DreamLoc does not read, in file order, kept so that saving the file loses nothing. */
+	TArray<TPair<FString, FString>> Others;
 
 	EDreamLocTranslatorKind GetKind() const;
 	/** Whether texts may go to it when they are only for local translators: Local, else its address. */
