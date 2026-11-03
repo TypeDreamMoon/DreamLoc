@@ -115,6 +115,9 @@ private:
 	void SaveProfiles();
 	void TestProfile();
 	void LoadProjectSettings();
+	/** The settings' profile choices from the profiles there are now, keeping what is chosen. */
+	void RebuildSettingsChoices();
+	FText SettingLabel(const TSharedPtr<FString>& InChoice) const;
 	void SaveProjectSettings();
 
 	FText GetProgressText() const;
@@ -152,8 +155,13 @@ private:
 	TSharedPtr<SComboBox<TSharedPtr<FString>>> TypeCombo;
 	FText ProfilesText;
 	FText TestText;
-	TSharedPtr<SEditableTextBox> SettingsProfile;
-	TSharedPtr<SEditableTextBox> SettingsFallback;
+	/** The project's translator and Fallback, picked from the profiles (empty: none). */
+	TArray<TSharedPtr<FString>> SettingsProfileChoices;
+	TArray<TSharedPtr<FString>> SettingsFallbackChoices;
+	TSharedPtr<FString> SettingsProfileChoice;
+	TSharedPtr<FString> SettingsFallbackChoice;
+	TSharedPtr<SComboBox<TSharedPtr<FString>>> SettingsProfileCombo;
+	TSharedPtr<SComboBox<TSharedPtr<FString>>> SettingsFallbackCombo;
 	TSharedPtr<SEditableTextBox> SettingsBatchSize;
 	TSharedPtr<SEditableTextBox> SettingsConcurrency;
 	TSharedPtr<SEditableTextBox> SettingsRetry;

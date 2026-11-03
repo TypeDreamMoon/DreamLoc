@@ -1440,6 +1440,7 @@ void SDreamLocTranslateWindow::SaveProfiles()
 	ProfilesText = bSaved ? FText::Format(LOCTEXT("ProfilesSaved", "Saved to {0}"), FText::FromString(DreamLocTranslateConfig::GetUserConfigPath()))
 		: FText::Format(LOCTEXT("ProfilesNotSaved", "{0} cannot be written"), FText::FromString(DreamLocTranslateConfig::GetUserConfigPath()));
 	RebuildProfileChoices();
+	RebuildSettingsChoices();
 }
 
 void SDreamLocTranslateWindow::TestProfile()
@@ -1488,12 +1489,32 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeProjectSettings()
 		Grid->AddSlot(1, RowIndex).Padding(0.0f, 2.0f)[InEditor];
 		++RowIndex;
 	};
+	auto Choose = [this](TSharedPtr<SComboBox<TSharedPtr<FString>>>& OutCombo, TArray<TSharedPtr<FString>>* InChoices, TSharedPtr<FString>* InChoice) -> TSharedRef<SWidget>
+	{
+		return SNew(SBox).HAlign(HAlign_Left)
+		[
+			SAssignNew(OutCombo, SComboBox<TSharedPtr<FString>>)
+			.OptionsSource(InChoices)
+			.OnComboBoxOpening_Lambda([this]() { RebuildSettingsChoices(); })
+			.OnGenerateWidget_Lambda([this](TSharedPtr<FString> InItem) -> TSharedRef<SWidget> { return SNew(STextBlock).Text(SettingLabel(InItem)); })
+			.OnSelectionChanged_Lambda([InChoice](TSharedPtr<FString> InItem, ESelectInfo::Type)
+			{
+				if (InItem.IsValid())
+				{
+					*InChoice = InItem;
+				}
+			})
+			[
+				SNew(STextBlock).Text_Lambda([this, InChoice]() { return SettingLabel(*InChoice); })
+			]
+		];
+	};
 	AddRow(LOCTEXT("SettingProfile", "Translator"), LOCTEXT("SettingProfileTip", "[Translate] Profile: the profile used by default"),
-		SAssignNew(SettingsProfile, SEditableTextBox));
+		Choose(SettingsProfileCombo, &SettingsProfileChoices, &SettingsProfileChoice));
 	AddRow(LOCTEXT("SettingByCulture", "Translator by culture"), LOCTEXT("SettingByCultureTip", "[Translate] Profile.<culture>: one line each, ja=deepl"),
 		SNew(SBox).MinDesiredHeight(44.0f)[SAssignNew(SettingsByCulture, SMultiLineEditableTextBox).HintText(LOCTEXT("ByCultureHint", "ja=deepl"))]);
 	AddRow(LOCTEXT("SettingFallback", "Fallback large model"), LOCTEXT("SettingFallbackTip", "[Translate] Fallback: what a machine translator cannot do goes to it"),
-		SAssignNew(SettingsFallback, SEditableTextBox));
+		Choose(SettingsFallbackCombo, &SettingsFallbackChoices, &SettingsFallbackChoice));
 	AddRow(LOCTEXT("SettingBatchSize", "Entries per request"), LOCTEXT("SettingBatchSizeTip", "[Translate] BatchSize (default 40)"),
 		SAssignNew(SettingsBatchSize, SEditableTextBox));
 	AddRow(LOCTEXT("SettingConcurrency", "Requests at once"), LOCTEXT("SettingConcurrencyTip", "[Translate] Concurrency (default 2)"),
@@ -1525,14 +1546,62 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeProjectSettings()
 		];
 }
 
+FText SDreamLocTranslateWindow::SettingLabel(const TSharedPtr<FString>& InChoice) const
+{
+	return InChoice.IsValid() && !InChoice->IsEmpty() ? ProfileLabel(*InChoice) : LOCTEXT("NoProfileSetting", "(none)");
+}
+
+void SDreamLocTranslateWindow::RebuildSettingsChoices()
+{
+	const FString Profile = SettingsProfileChoice.IsValid() ? *SettingsProfileChoice : Settings.TranslateProfile;
+	const FString Fallback = SettingsFallbackChoice.IsValid() ? *SettingsFallbackChoice : Settings.TranslateFallback;
+	auto Build = [this](TArray<TSharedPtr<FString>>& OutChoices, bool bInLargeModelsOnly, const FString& InChosen)
+	{
+		OutChoices.Reset();
+		OutChoices.Add(MakeShared<FString>());
+		TSharedPtr<FString> Chosen = OutChoices[0];
+		for (const TSharedPtr<FDreamLocTranslateProfile>& Item : ProfileItems)
+		{
+			if (!Item->Name.IsEmpty() && (!bInLargeModelsOnly || Item->GetKind() == EDreamLocTranslatorKind::LargeModel))
+			{
+				OutChoices.Add(MakeShared<FString>(Item->Name));
+				if (Item->Name == InChosen)
+				{
+					Chosen = OutChoices.Last();
+				}
+			}
+		}
+		// A name dloc.ini has and translators.ini does not: kept, so saving does not lose it.
+		if (!InChosen.IsEmpty() && Chosen == OutChoices[0])
+		{
+			OutChoices.Add(MakeShared<FString>(InChosen));
+			Chosen = OutChoices.Last();
+		}
+		return Chosen;
+	};
+	SettingsProfileChoice = Build(SettingsProfileChoices, /*bInLargeModelsOnly*/ false, Profile);
+	SettingsFallbackChoice = Build(SettingsFallbackChoices, /*bInLargeModelsOnly*/ true, Fallback);
+	for (const TPair<TSharedPtr<SComboBox<TSharedPtr<FString>>>, TSharedPtr<FString>>& Combo : {
+		TPair<TSharedPtr<SComboBox<TSharedPtr<FString>>>, TSharedPtr<FString>>(SettingsProfileCombo, SettingsProfileChoice),
+		TPair<TSharedPtr<SComboBox<TSharedPtr<FString>>>, TSharedPtr<FString>>(SettingsFallbackCombo, SettingsFallbackChoice) })
+	{
+		if (Combo.Key.IsValid())
+		{
+			Combo.Key->RefreshOptions();
+			Combo.Key->SetSelectedItem(Combo.Value);
+		}
+	}
+}
+
 void SDreamLocTranslateWindow::LoadProjectSettings()
 {
-	if (!SettingsProfile.IsValid())
+	if (!SettingsBatchSize.IsValid())
 	{
 		return;
 	}
-	SettingsProfile->SetText(FText::FromString(Settings.TranslateProfile));
-	SettingsFallback->SetText(FText::FromString(Settings.TranslateFallback));
+	SettingsProfileChoice.Reset();
+	SettingsFallbackChoice.Reset();
+	RebuildSettingsChoices();
 	SettingsBatchSize->SetText(FText::AsNumber(Settings.TranslateBatchSize, &FNumberFormattingOptions::DefaultNoGrouping()));
 	SettingsConcurrency->SetText(FText::AsNumber(Settings.TranslateConcurrency, &FNumberFormattingOptions::DefaultNoGrouping()));
 	SettingsRetry->SetText(FText::AsNumber(Settings.TranslateRetry, &FNumberFormattingOptions::DefaultNoGrouping()));
@@ -1549,8 +1618,8 @@ void SDreamLocTranslateWindow::LoadProjectSettings()
 void SDreamLocTranslateWindow::SaveProjectSettings()
 {
 	FDreamLocSettings Changed = Settings;
-	Changed.TranslateProfile = SettingsProfile->GetText().ToString().TrimStartAndEnd();
-	Changed.TranslateFallback = SettingsFallback->GetText().ToString().TrimStartAndEnd();
+	Changed.TranslateProfile = SettingsProfileChoice.IsValid() ? *SettingsProfileChoice : FString();
+	Changed.TranslateFallback = SettingsFallbackChoice.IsValid() ? *SettingsFallbackChoice : FString();
 	Changed.TranslateStyle = SettingsStyle->GetText().ToString().TrimStartAndEnd();
 	struct FNumber
 	{
