@@ -177,6 +177,7 @@ namespace DreamLocTranslateWindowTestsLocal
 		int32 Frames = 0;
 		int32 CallsBefore = 0;
 		bool bFailed = false;
+		TUniquePtr<FLogCapture> Log;
 
 		explicit FClicks(FScenarioRef InScenario) : Scenario(InScenario) {}
 
@@ -326,6 +327,9 @@ bool FDreamLocTranslateWindowClicksTest::RunTest(const FString& Parameters)
 		];
 	FSlateApplication::Get().AddWindow(C->Host.ToSharedRef(), /*bShowImmediately*/ true);
 	C->User = FSlateApplication::Get().FindOrCreateVirtualUser(5);
+	// The steps of a click, as `log LogDreamLocTranslate Verbose` shows them.
+	UE_SET_LOG_VERBOSITY(LogDreamLocTranslate, Verbose);
+	C->Log = MakeUnique<FLogCapture>();
 	C->Window->SetCultures({ TEXT("en") });
 	C->Window->SetProfile(TEXT("profile1"));
 	TestTrue(TEXT("a run starts"), C->Window->StartTranslate());
@@ -428,6 +432,27 @@ bool FDreamLocTranslateWindowClicksTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("a translation's line break survives its box losing focus"), Describe(C->Scenario->Entry(TEXT("en/UI/Menu.dloc"), TEXT("Lines"))),
 			TEXT("en: 第一行\n第二行|machine"));
+		return true;
+	});
+	Steps.Add([this, C]()
+	{
+		const FString Logged = C->Log.IsValid() ? C->Log->Get() : FString();
+		C->Log.Reset();
+		UE_SET_LOG_VERBOSITY(LogDreamLocTranslate, Log);
+		TArray<FString> Lines;
+		Logged.ParseIntoArrayLines(Lines);
+		const FString* Down = Lines.FindByPredicate([](const FString& InLine) { return InLine.Contains(TEXT("Start: LeftMouseButton down at")); });
+		TestTrue(TEXT("the log says where a press went down and what it landed on"), Down != nullptr && Down->Contains(TEXT("SButton(DreamLocTranslate.Pass)")));
+		if (Down != nullptr)
+		{
+			AddInfo(*Down);
+		}
+		for (const TCHAR* Said : { TEXT("Start: Pass pressed"), TEXT("Start: Pass clicked"), TEXT("passed: 1 row(s) asked, 1 written"), TEXT("Quit: Reject clicked"),
+			TEXT("Note: Again clicked"), TEXT("again: en/Menu Note with profile1") })
+		{
+			TestTrue(FString::Printf(TEXT("the log says '%s'"), Said), Logged.Contains(Said));
+		}
+		TestFalse(TEXT("no press was left to a row"), Logged.Contains(TEXT("the row itself took the press")));
 		return true;
 	});
 	Steps.Add([C]()
