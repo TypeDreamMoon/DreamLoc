@@ -38,6 +38,7 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SSplitter.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SToolTip.h"
@@ -295,22 +296,26 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			// Wraps when the window is narrow: nothing at the end is cut off.
+			SNew(SWrapBox).UseAllottedSize(true)
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
 			[
 				Choices(CultureCombo, &CultureChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoCulture", "(no culture)") : FText::FromString(InName); },
 					[this](const FString& InName) { SetCulture(InName); }, [this]() { return Culture; }, TEXT("DreamLocTranslate.Culture"),
 					LOCTEXT("CultureTip", "The culture to review"))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)[Filters]
-			+ SHorizontalBox::Slot().FillWidth(1.0f).MaxWidth(260.0f).Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)[Filters]
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
 			[
-				SAssignNew(SearchBox, SSearchBox)
-				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Search")))
-				.HintText(LOCTEXT("SearchHint", "Key, source or translation"))
-				.OnTextChanged_Lambda([this](const FText& InText) { SetSearch(InText.ToString()); })
+				SNew(SBox).WidthOverride(240.0f)
+				[
+					SAssignNew(SearchBox, SSearchBox)
+					.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Search")))
+					.HintText(LOCTEXT("SearchHint", "Key, source or translation"))
+					.OnTextChanged_Lambda([this](const FText& InText) { SetSearch(InText.ToString()); })
+				]
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
 			[
 				SNew(SCheckBox)
 				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Files")))
@@ -322,19 +327,19 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 					SNew(SBox).Padding(FMargin(6.0f, 2.0f))[SNew(STextBlock).Text(LOCTEXT("FilesButton", "Files"))]
 				]
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
 			[
 				Choices(ReferenceCombo, &ReferenceChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoReference", "No reference") : FText::Format(LOCTEXT("Reference", "Reference: {0}"), FText::FromString(InName)); },
 					[this](const FString& InName) { SetReferenceCulture(InName); }, [this]() { return ReferenceCulture; }, TEXT("DreamLocTranslate.ReferenceCulture"),
 					LOCTEXT("ReferenceTip", "Another culture's translations, beside this one's"))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
 			[
 				Choices(ProfileCombo, &ProfileChoices, [this](const FString& InName) { return ProfileLabel(InName); },
 					[this](const FString& InName) { SetProfile(InName); }, [this]() { return Profile; }, TEXT("DreamLocTranslate.Profile"),
 					LOCTEXT("ProfileTip", "The translator for this window's actions"))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 6.0f, 0.0f)
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
 			[
 				SNew(SButton)
 				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Settings")))
@@ -345,7 +350,7 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 					SNew(SImage).Image(FAppStyle::GetBrush(TEXT("Icons.Settings"))).ColorAndOpacity(FSlateColor::UseForeground())
 				]
 			]
-			+ SHorizontalBox::Slot().AutoWidth()
+			+ SWrapBox::Slot().Padding(0.0f, 0.0f, 0.0f, 4.0f).VAlign(VAlign_Center)
 			[
 				SNew(SButton)
 				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.Pretranslate")))

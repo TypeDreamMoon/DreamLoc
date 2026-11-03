@@ -144,6 +144,8 @@ namespace DreamLocTranslateWindowTestsLocal
 		/** What is held while the pointer moves and clicks. */
 		FModifierKeysState Modifiers;
 		int32 Frames = 0;
+		/** Where the widget to click was the frame before. */
+		TOptional<FVector2D> LastCentre;
 		int32 CallsBefore = 0;
 		double Began = 0.0;
 		bool bFailed = false;
@@ -315,9 +317,23 @@ namespace DreamLocTranslateWindowTestsLocal
 				}
 				return false;
 			}
-			D.Frames = 0;
 			const FGeometry& Geometry = Path.Widgets.Last().Geometry;
-			D.Point = FVector2D(Geometry.LocalToAbsolute(Geometry.GetLocalSize() * 0.5f));
+			const FVector2D Centre = FVector2D(Geometry.LocalToAbsolute(Geometry.GetLocalSize() * 0.5f));
+			// Where it is two frames running: a layout that settles a frame late (a wrap box) moves it under the click.
+			if (!D.LastCentre.IsSet() || !D.LastCentre->Equals(Centre, 0.5))
+			{
+				D.LastCentre = Centre;
+				if (++D.Frames > 120)
+				{
+					Test->AddError(FString::Printf(TEXT("%s does not keep still after 120 frames"), *InWhat));
+					D.bFailed = true;
+					return true;
+				}
+				return false;
+			}
+			D.Frames = 0;
+			D.LastCentre.Reset();
+			D.Point = Centre;
 			FSlateApplication::Get().ProcessMouseMoveEvent(D.Event(TSet<FKey>(), EKeys::Invalid));
 			return true;
 		});
