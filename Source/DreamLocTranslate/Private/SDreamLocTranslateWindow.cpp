@@ -1115,6 +1115,12 @@ void SDreamLocTranslateWindow::OpenRowInEditor(const TSharedPtr<FDreamLocTransla
 	}
 }
 
+TSharedPtr<SWidget> SDreamLocTranslateWindow::GetRowWidget(const TSharedPtr<FDreamLocTranslateRowItem>& InItem) const
+{
+	const TSharedPtr<ITableRow> Row = ResultsList.IsValid() ? ResultsList->WidgetFromItem(InItem) : nullptr;
+	return Row.IsValid() ? Row->AsWidget() : TSharedPtr<SWidget>();
+}
+
 FText SDreamLocTranslateWindow::GetProgressText() const
 {
 	if (!Running.IsValid())

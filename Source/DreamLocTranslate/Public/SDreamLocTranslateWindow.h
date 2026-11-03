@@ -83,6 +83,8 @@ public:
 	/** Translates that one entry again; its row changes when the run is done. */
 	bool RetranslateRow(const TSharedPtr<FDreamLocTranslateRowItem>& InItem);
 	void OpenRowInEditor(const TSharedPtr<FDreamLocTranslateRowItem>& InItem) const;
+	/** The results table's row widget for an item; null when it is not generated (not in view, not painted yet). */
+	TSharedPtr<SWidget> GetRowWidget(const TSharedPtr<FDreamLocTranslateRowItem>& InItem) const;
 	const FDreamLocTranslateResult& GetLastResult() const { return LastResult; }
 	const TArray<FString>& GetLastErrors() const { return LastErrors; }
 

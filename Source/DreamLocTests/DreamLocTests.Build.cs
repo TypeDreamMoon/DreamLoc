@@ -14,7 +14,7 @@ public class DreamLocTests : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"Core", "CoreUObject", "Engine", "DreamLoc", "DreamLocEditor", "DreamLocTranslate", "Localization", "Projects",
-			"HTTP", "HTTPServer", "Json", "Sockets", "Slate", "SlateCore",
+			"HTTP", "HTTPServer", "Json", "Sockets", "Slate", "SlateCore", "InputCore",
 		});
 	}
 }
