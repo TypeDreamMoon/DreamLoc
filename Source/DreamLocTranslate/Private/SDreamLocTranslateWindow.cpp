@@ -72,7 +72,7 @@ namespace DreamLocTranslateWindowLocal
 		return InItem.Row.Culture / InItem.Row.Namespace + TEXT(" ") + InItem.Row.Key;
 	}
 
-	/** A widget's last painted rectangle on the desktop, for the log. */
+	/** A widget's last painted rectangle on the desktop (as a press's position is), for the log. */
 	FString RectOf(const TWeakPtr<SWidget>& InWidget)
 	{
 		const TSharedPtr<SWidget> Widget = InWidget.Pin();
@@ -80,7 +80,7 @@ namespace DreamLocTranslateWindowLocal
 		{
 			return TEXT("(none)");
 		}
-		const FSlateRect Rect = Widget->GetPaintSpaceGeometry().GetLayoutBoundingRect();
+		const FSlateRect Rect = Widget->GetTickSpaceGeometry().GetLayoutBoundingRect();
 		return FString::Printf(TEXT("[%.0f..%.0f x %.0f..%.0f]%s"), Rect.Left, Rect.Right, Rect.Top, Rect.Bottom, Widget->IsEnabled() ? TEXT("") : TEXT(" disabled"));
 	}
 
