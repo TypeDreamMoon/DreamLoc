@@ -4,6 +4,7 @@
 
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
+#include "DreamLocInContext.h"
 #include "HttpModule.h"
 #include "ISettingsModule.h"
 #include "Modules/ModuleManager.h"
@@ -48,6 +49,8 @@ public:
 				Settings->RegisterSettings(TEXT("Project"), TEXT("Plugins"), TEXT("DreamLoc"), LOCTEXT("ProjectSettings", "DreamLoc"),
 					LOCTEXT("ProjectSettingsTip", "How this project translates: dloc.ini's [Translate]"), SNew(SDreamLocProjectTranslateSettings));
 			}
+			// Alt+click a text in the editor or PIE: the translation window at its entry.
+			DreamLocInContext::Register();
 		}
 		UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FDreamLocTranslateModule::RegisterMenus));
 	}
@@ -59,6 +62,7 @@ public:
 		{
 			Menus->UnregisterOwner(this);
 		}
+		DreamLocInContext::Unregister();
 		if (FSlateApplication::IsInitialized())
 		{
 			FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(DreamLocTranslateModuleLocal::TabName);

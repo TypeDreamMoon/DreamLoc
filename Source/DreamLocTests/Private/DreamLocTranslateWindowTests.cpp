@@ -2,6 +2,7 @@
 
 #include "DreamLocChips.h"
 #include "DreamLocContextProvider.h"
+#include "DreamLocInContext.h"
 #include "DreamLocTextSource.h"
 #include "DreamLocTranslateModule.h"
 #include "DreamLocTranslateTestUtil.h"
@@ -409,6 +410,7 @@ namespace DreamLocTranslateWindowTestsLocal
 	{
 		OutSteps.Add([InDesk]()
 		{
+			DreamLocInContext::SetOnPick(nullptr);
 			FSlateApplication::Get().DismissAllMenus();
 			FSlateApplication::Get().RequestDestroyWindow(InDesk->Host.ToSharedRef());
 			InDesk->User.Reset();
@@ -998,6 +1000,96 @@ bool FDreamLocProjectSettingsTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("not a number: not saved"), Page->GetStatus().ToString(), TEXT("Not saved: 'x' is not a whole number of 0 or more."));
 		TestFalse(TEXT("the file as it was"), S->Read(TEXT("dloc.ini")).Contains(TEXT("Retry")));
+	});
+	AddEnd(Steps, D);
+	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocInContextTest, "DreamLoc.Translate.InContext.AltClickOnASlateTextFindsItsKey",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocInContextTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	// What a text says about itself.
+	auto Says = [](const FText& InText)
+	{
+		const DreamLocInContext::FFound Found = DreamLocInContext::Describe(InText);
+		return Found.HasKey() ? Found.Namespace + TEXT(" / ") + Found.Key : TEXT("none: ") + Found.WhyNot;
+	};
+	TestEqual(TEXT("a LOCTEXT's namespace and key"), Says(NSLOCTEXT("DreamLocTestMenu", "Start", "开始游戏")), TEXT("DreamLocTestMenu / Start"));
+	TestEqual(TEXT("an asset text's: the package's part of the namespace stripped"),
+		Says(FText::ChangeKey(TEXT("Menu [0A1B2C3D4E5F]"), TEXT("Quit"), FText::FromString(TEXT("退出")))), TEXT("Menu / Quit"));
+	TestTrue(TEXT("FromString: why not"), Says(FText::FromString(TEXT("plain"))).Contains(TEXT("FText::FromString")));
+	TestTrue(TEXT("a format: why not"), Says(FText::Format(NSLOCTEXT("DreamLocTestMenu", "Gold", "{0} gold"), 3)).Contains(TEXT("FText::Format")));
+	TestTrue(TEXT("culture invariant: why not"), Says(FText::AsCultureInvariant(TEXT("v1.0"))).Contains(TEXT("AsCultureInvariant")));
+
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("InContext")))
+	{
+		return false;
+	}
+	const TSharedRef<bool> bClicked = MakeShared<bool>(false);
+	const TSharedRef<SWidget> Content = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(20.0f)
+		[
+			SNew(SButton)
+			.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("Test.StartButton")))
+			.OnClicked_Lambda([bClicked]() { *bClicked = true; return FReply::Handled(); })
+			[
+				// Not hit-testable itself, as UMG's text blocks are: the button is what the mouse is over.
+				SNew(STextBlock).AddMetaData<FTagMetaData>(FTagMetaData(TEXT("Test.Start"))).Visibility(EVisibility::SelfHitTestInvisible)
+				.Text(NSLOCTEXT("DreamLocTestMenu", "Start", "开始游戏"))
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(20.0f)
+		[
+			SNew(STextBlock).AddMetaData<FTagMetaData>(FTagMetaData(TEXT("Test.Plain"))).Text(FText::FromString(TEXT("plain")))
+		];
+	const FDeskRef D = MakeDeskWith(S, Content);
+	const TSharedRef<TArray<FString>> Picked = MakeShared<TArray<FString>>();
+	DreamLocInContext::SetOnPick([Picked](const DreamLocInContext::FFound& InFound)
+	{
+		Picked->Add(InFound.HasKey() ? InFound.Namespace + TEXT(" / ") + InFound.Key : TEXT("none: ") + InFound.WhyNot);
+	});
+	FModifierKeysState Alt(false, false, false, false, /*LeftAlt*/ true, false, false, false, false);
+	TArray<TFunction<bool()>> Steps;
+	// Alt held over a text: outlined.
+	AddCheck(Steps, D, [D, Alt]() { D->Modifiers = Alt; });
+	AddClick(*this, Steps, D, TEXT("Alt+click on Start"), [D]() { return D->Tagged(TEXT("Test.Start")); });
+	AddCheck(Steps, D, [this, D, Picked, bClicked]()
+	{
+		const TOptional<DreamLocInContext::FFound> Lit = DreamLocInContext::GetHighlighted();
+		TestEqual(TEXT("Alt over it outlines it"), Lit.IsSet() ? Lit->Namespace + TEXT(" / ") + Lit->Key : FString(TEXT("(nothing)")), TEXT("DreamLocTestMenu / Start"));
+		TestTrue(TEXT("its rectangle on the desktop"), Lit.IsSet() && Lit->Rect.bIsValid && Lit->Rect.Min.X < -10000.0);
+		TestEqual(TEXT("Alt+click picks its key"), FString::Join(*Picked, TEXT(" | ")), TEXT("DreamLocTestMenu / Start"));
+		TestFalse(TEXT("and the button under it is not clicked"), *bClicked);
+	});
+	AddClick(*this, Steps, D, TEXT("Alt+click on plain"), [D]() { return D->Tagged(TEXT("Test.Plain")); });
+	AddCheck(Steps, D, [this, Picked]()
+	{
+		TestTrue(TEXT("a text without a key: why not"), Picked->Num() == 2 && (*Picked)[1].Contains(TEXT("FText::FromString")));
+	});
+	// Without Alt: the outline goes, a click is the button's.
+	AddCheck(Steps, D, [D]() { D->Modifiers = FModifierKeysState(); });
+	AddClick(*this, Steps, D, TEXT("a click on Start"), [D]() { return D->Tagged(TEXT("Test.Start")); });
+	AddCheck(Steps, D, [this, Picked, bClicked]()
+	{
+		TestFalse(TEXT("no outline without Alt"), DreamLocInContext::GetHighlighted().IsSet());
+		TestTrue(TEXT("a click without Alt is the button's"), *bClicked);
+		TestEqual(TEXT("and picks nothing"), Picked->Num(), 2);
+	});
+	// The default pick: a text without a key says why at the cursor.
+	AddCheck(Steps, D, [D, Alt]()
+	{
+		DreamLocInContext::SetOnPick(nullptr);
+		D->Modifiers = Alt;
+	});
+	AddClick(*this, Steps, D, TEXT("Alt+click on plain"), [D]() { return D->Tagged(TEXT("Test.Plain")); });
+	AddCheck(Steps, D, [this, D]()
+	{
+		TestTrue(FString::Printf(TEXT("the hint at the cursor (%s)"), *DreamLocInContext::GetHint()), DreamLocInContext::GetHint().Contains(TEXT("FText::FromString")));
+		D->Modifiers = FModifierKeysState();
 	});
 	AddEnd(Steps, D);
 	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
