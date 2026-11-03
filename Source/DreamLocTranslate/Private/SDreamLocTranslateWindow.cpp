@@ -161,15 +161,20 @@ namespace DreamLocTranslateWindowLocal
 			if (InColumn == ColumnNew)
 			{
 				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
+				// Multi-line: a translation's line breaks are its own, and a single-line box would drop them when it commits.
 				return SNew(SBox).Padding(FMargin(2.0f, 1.0f))
 				[
-					SNew(SEditableTextBox)
+					SNew(SMultiLineEditableTextBox)
+					.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.New")))
+					.AutoWrapText(false)
+					.ModiferKeyForNewLine(EModifierKey::Shift)
 					.Text_Lambda([Shown]() { return FText::FromString(Shown->Row.NewText); })
-					.HintText(FText::FromString(OneLine(Row.RejectedText)))
+					.HintText_Lambda([Shown]() { return FText::FromString(OneLine(Shown->Row.RejectedText)); })
 					.IsEnabled_Lambda([Shown]() { return !Shown->bBusy; })
 					.OnTextCommitted_Lambda([this](const FText& InText, ETextCommit::Type InCommit)
 					{
-						const FString Text = InText.ToString();
+						// The box gives its lines back joined by the platform's line end (\r\n on Windows); a .dloc's are \n.
+						const FString Text = InText.ToString().Replace(TEXT("\r\n"), TEXT("\n"));
 						const TSharedPtr<SDreamLocTranslateWindow> Owner = Window.Pin();
 						if (InCommit != ETextCommit::OnCleared && Owner.IsValid() && !Text.Equals(Item->Row.NewText, ESearchCase::CaseSensitive))
 						{
