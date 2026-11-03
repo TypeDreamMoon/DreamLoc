@@ -133,9 +133,9 @@ whose translations nobody needs any more. A plugin keeps its own texts with `dlo
 
 With DreamNarrative in the test host too (a worktree in `Plugins/DreamNarrative`, the plugin enabled in the
 `.uproject`, the `.dna` under `DNarrative/`), `DreamLocHost.Acceptance.DreamNarrative.*` takes a chapter through DLoc:
-first `dnc.ps1 build` and `dnc.ps1 loc-export` with `-Project <host>` (a DreamNarrative older than 029186f also needs
-`-Root <host>/DNarrative`, absolute, when the engine and the host share a drive), then
-the test syncs the chapter's manifest, imports the old CSV with its translations, checks, and reads the compiled
+first `dnc.ps1 build -Project <host>`, which writes the chapter's manifest, then the test syncs it, imports the old CSV
+-- `Tests/DreamNarrative/Lighthouse.loc-export.csv`, what `dnc loc-export` wrote for the chapter before DreamNarrative
+dropped the command, with its translations filled in -- checks, and reads the compiled
 chapter's texts under the English preview. Without DreamNarrative the test has nothing to check and says so.
 
 `Tools/TestHost/Test-Package.ps1` packages the test host, Development and Shipping, finds the baked files in the pak
@@ -152,7 +152,7 @@ what each `{0}` is), the texts around it in its file, the culture's terms the so
 for a stale entry the old source and its translation. `dloc import -In <file>` brings the translations back by
 namespace and key: `-State machine` marks them, a reviewed translation (`state done`) stays unless `-Force`, and a
 translation made for a source text that has changed since comes in stale. A CSV's columns are found by name, so
-DreamNarrative's old `dnc loc-export` file imports too (it names no culture: give `-Culture`).
+the CSV DreamNarrative's `dnc loc-export` used to write imports too (it names no culture: give `-Culture`).
 
 For an AI the JSON is the whole job: it carries its own instructions (keep the arguments and tags, the plural forms
 the language needs, the length, the terms), and the model only fills in each entry's `text`:
