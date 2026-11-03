@@ -11,6 +11,10 @@
 #include "Framework/Application/SlateUser.h"
 #include "Framework/Docking/TabManager.h"
 #include "HAL/IConsoleManager.h"
+#include "ISettingsCategory.h"
+#include "ISettingsContainer.h"
+#include "ISettingsModule.h"
+#include "ISettingsSection.h"
 #include "Layout/WidgetPath.h"
 #include "SDreamLocPretranslateDialog.h"
 #include "SDreamLocTranslateSettings.h"
@@ -982,6 +986,31 @@ bool FDreamLocTranslatorSettingsTest::RunTest(const FString& Parameters)
 	AddWait(*this, Steps, D, TEXT("the page reading the file changed elsewhere"), 15.0, [Page]() { return Page->GetProfiles().Num() == 2; });
 	AddEnd(Steps, D);
 	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocSettingsPagesTest, "DreamLoc.Translate.Settings.BothPagesAreThereForTheSettingsEditor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocSettingsPagesTest::RunTest(const FString& Parameters)
+{
+	// As the settings editor finds a page: its section, and the section's widget -- which it holds weakly.
+	ISettingsModule* Settings = FModuleManager::GetModulePtr<ISettingsModule>(TEXT("Settings"));
+	TestNotNull(TEXT("the settings module"), Settings);
+	struct FPage
+	{
+		FName Key;
+		FName Value;
+	};
+	const FPage Pages[] = { { TEXT("Editor"), DreamLocTranslateWindow::GetTranslatorsSettingsName() }, { TEXT("Project"), TEXT("DreamLoc") } };
+	for (const FPage& Page : Pages)
+	{
+		const TSharedPtr<ISettingsContainer> Container = Settings != nullptr ? Settings->GetContainer(Page.Key) : nullptr;
+		const TSharedPtr<ISettingsCategory> Category = Container.IsValid() ? Container->GetCategory(TEXT("Plugins")) : nullptr;
+		const TSharedPtr<ISettingsSection> Section = Category.IsValid() ? Category->GetSection(Page.Value, /*bIgnoreVisibility*/ true) : nullptr;
+		TestTrue(FString::Printf(TEXT("%s > Plugins > %s is registered"), *Page.Key.ToString(), *Page.Value.ToString()), Section.IsValid());
+		TestTrue(FString::Printf(TEXT("%s > Plugins > %s has its page to show"), *Page.Key.ToString(), *Page.Value.ToString()),
+			Section.IsValid() && Section->GetCustomWidget().IsValid());
+	}
 	return true;
 }
 

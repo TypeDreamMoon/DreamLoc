@@ -39,15 +39,18 @@ public:
 			// Without it a new window for the tab takes the tab manager's own default.
 			FTabManager::RegisterDefaultTabWindowSize(FTabId(DreamLocTranslateModuleLocal::TabName), DreamLocTranslateWindow::GetDefaultSize());
 			// The translators are the user's (translators.ini), the project's choice among them is dloc.ini's: each page
-			// reads and writes its own file, nothing goes to the engine's settings files.
+			// reads and writes its own file, nothing goes to the engine's settings files. A section holds its widget weakly
+			// (FSettingsSection::CustomWidget): the module keeps them, or the pages are gone before anyone opens them.
 			if (ISettingsModule* Settings = FModuleManager::LoadModulePtr<ISettingsModule>(TEXT("Settings")))
 			{
+				TranslatorsPage = SNew(SDreamLocTranslatorSettings);
+				ProjectPage = SNew(SDreamLocProjectTranslateSettings);
 				Settings->RegisterSettings(TEXT("Editor"), TEXT("Plugins"), DreamLocTranslateWindow::GetTranslatorsSettingsName(),
 					LOCTEXT("TranslatorsSettings", "DreamLoc translators"),
 					LOCTEXT("TranslatorsSettingsTip", "The large models and machine translators DreamLoc can use, yours for every project (%APPDATA%/DreamLoc/translators.ini)"),
-					SNew(SDreamLocTranslatorSettings));
+					TranslatorsPage.ToSharedRef());
 				Settings->RegisterSettings(TEXT("Project"), TEXT("Plugins"), TEXT("DreamLoc"), LOCTEXT("ProjectSettings", "DreamLoc"),
-					LOCTEXT("ProjectSettingsTip", "How this project translates: dloc.ini's [Translate]"), SNew(SDreamLocProjectTranslateSettings));
+					LOCTEXT("ProjectSettingsTip", "How this project translates: dloc.ini's [Translate]"), ProjectPage.ToSharedRef());
 			}
 			// Alt+click a text in the editor or PIE: the translation window at its entry.
 			DreamLocInContext::Register();
@@ -73,9 +76,14 @@ public:
 			Settings->UnregisterSettings(TEXT("Editor"), TEXT("Plugins"), DreamLocTranslateWindow::GetTranslatorsSettingsName());
 			Settings->UnregisterSettings(TEXT("Project"), TEXT("Plugins"), TEXT("DreamLoc"));
 		}
+		TranslatorsPage.Reset();
+		ProjectPage.Reset();
 	}
 
 private:
+	TSharedPtr<SWidget> TranslatorsPage;
+	TSharedPtr<SWidget> ProjectPage;
+
 	void RegisterMenus()
 	{
 		FToolMenuOwnerScoped Owner(this);
