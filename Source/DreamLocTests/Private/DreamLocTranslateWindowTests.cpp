@@ -22,6 +22,7 @@
 #include "Types/ISlateMetaData.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/SBoxPanel.h"
@@ -1149,6 +1150,75 @@ bool FDreamLocInContextTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(FString::Printf(TEXT("the hint at the cursor (%s)"), *DreamLocInContext::GetHint()), DreamLocInContext::GetHint().Contains(TEXT("FText::FromString")));
 		D->Modifiers = FModifierKeysState();
+	});
+	AddEnd(Steps, D);
+	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
+namespace DreamLocTranslateWindowTestsLocal
+{
+	/** The first text block under a widget that says InText. */
+	TSharedPtr<SWidget> FindText(const TSharedRef<SWidget>& InRoot, const FString& InText)
+	{
+		if (InRoot->GetType() == TEXT("STextBlock") && StaticCastSharedRef<STextBlock>(InRoot)->GetText().ToString() == InText)
+		{
+			return InRoot;
+		}
+		FChildren* Children = InRoot->GetChildren();
+		for (int32 Index = 0; Children != nullptr && Index < Children->Num(); ++Index)
+		{
+			if (const TSharedPtr<SWidget> Found = FindText(Children->GetChildAt(Index), InText))
+			{
+				return Found;
+			}
+		}
+		return nullptr;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateCultureListTest, "DreamLoc.Translate.Window.TheCultureListSwitchesTheCulture",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateCultureListTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("CultureList")))
+	{
+		return false;
+	}
+	S->Write(TEXT("dloc.ini"), TEXT("[DreamLoc]\nSourceCulture=zh-Hans\nTargetCultures=en,ja\n"));
+	S->Write(TEXT("en/UI/Menu.dloc"), MakeDloc(TEXT("en"), TEXT("Menu"), { { TEXT("Start"), TEXT("开始游戏") } }));
+	S->Write(TEXT("ja/UI/Menu.dloc"), MakeDloc(TEXT("ja"), TEXT("Menu"), { { TEXT("Quit"), TEXT("退出") } }));
+	const FDeskRef D = MakeDesk(S);
+	TArray<TFunction<bool()>> Steps;
+	// The list opened as a click opens it, its menu not focused: a window that takes the focus would take the user's.
+	AddCheck(Steps, D, [this, D]()
+	{
+		TestEqual(TEXT("en to begin with"), D->Window->GetCulture(), TEXT("en"));
+		const TSharedPtr<SWidget> Combo = D->Tagged(TEXT("DreamLocTranslate.Culture"));
+		TestTrue(TEXT("the culture list"), Combo.IsValid());
+		if (Combo.IsValid())
+		{
+			StaticCastSharedPtr<SComboBox<TSharedPtr<FString>>>(Combo)->SetIsOpen(true, /*bFocusMenu*/ false);
+		}
+	});
+	AddClick(*this, Steps, D, TEXT("ja in the list"), [D]()
+	{
+		for (const TSharedRef<SWindow>& Child : D->Host->GetChildWindows())
+		{
+			if (const TSharedPtr<SWidget> Found = FindText(Child, TEXT("ja")))
+			{
+				return Found;
+			}
+		}
+		return TSharedPtr<SWidget>();
+	});
+	AddCheck(Steps, D, [this, D]()
+	{
+		TestEqual(TEXT("a culture chosen from the list"), D->Window->GetCulture(), TEXT("ja"));
+		TestEqual(TEXT("its entries shown"), Keys(D->Window->GetShown()), TEXT("Quit"));
+		FSlateApplication::Get().DismissAllMenus();
 	});
 	AddEnd(Steps, D);
 	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));

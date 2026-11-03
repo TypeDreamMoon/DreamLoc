@@ -264,12 +264,23 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 			.ToolTipText(InTip)
 			.OptionsSource(InChoices)
 			.OnGenerateWidget_Lambda([InLabel](TSharedPtr<FString> InItem) -> TSharedRef<SWidget> { return SNew(STextBlock).Text(InLabel(InItem.IsValid() ? *InItem : FString())); })
-			.OnSelectionChanged_Lambda([InChosen](TSharedPtr<FString> InItem, ESelectInfo::Type InHow)
+			.OnSelectionChanged_Lambda([this, InChosen, InCurrent, InTag](TSharedPtr<FString> InItem, ESelectInfo::Type InHow)
 			{
-				if (InItem.IsValid() && InHow != ESelectInfo::Direct)
+				UE_LOG(LogDreamLocTranslate, Verbose, TEXT("%s: '%s' chosen (select info %d), was '%s'"), InTag, InItem.IsValid() ? **InItem : TEXT("(none)"),
+					int32(InHow), *InCurrent());
+				// Whatever the list says the choice came by, a value other than the one there is a choice: and it is made
+				// once the list is done with the click, not in the middle of it (choosing reads everything again, the
+				// list's own options too).
+				if (!InItem.IsValid() || *InItem == InCurrent())
 				{
-					InChosen(*InItem);
+					return;
 				}
+				const FString Value = *InItem;
+				RegisterActiveTimer(0.0f, FWidgetActiveTimerDelegate::CreateLambda([InChosen, Value](double, float)
+				{
+					InChosen(Value);
+					return EActiveTimerReturnType::Stop;
+				}));
 			})
 			[
 				SNew(STextBlock).Text_Lambda([InLabel, InCurrent]() { return InLabel(InCurrent()); })
@@ -536,27 +547,38 @@ void SDreamLocTranslateWindow::Refresh()
 	{
 		Profile.Reset();
 	}
-	CultureChoices.Reset();
-	ReferenceChoices.Reset();
-	ReferenceChoices.Add(MakeShared<FString>());
-	for (const FString& Each : Settings.TargetCultures)
+	// A list's options made again only when they are other names: a list keeps the ones it shows (and may have chosen).
+	auto SetChoices = [](TArray<TSharedPtr<FString>>& OutChoices, const TArray<FString>& InNames, const TSharedPtr<SComboBox<TSharedPtr<FString>>>& InCombo)
 	{
-		CultureChoices.Add(MakeShared<FString>(Each));
-		ReferenceChoices.Add(MakeShared<FString>(Each));
-	}
-	ProfileChoices.Reset();
-	ProfileChoices.Add(MakeShared<FString>());
+		bool bSame = OutChoices.Num() == InNames.Num();
+		for (int32 Index = 0; bSame && Index < InNames.Num(); ++Index)
+		{
+			bSame = OutChoices[Index].IsValid() && *OutChoices[Index] == InNames[Index];
+		}
+		if (bSame)
+		{
+			return;
+		}
+		OutChoices.Reset();
+		for (const FString& Name : InNames)
+		{
+			OutChoices.Add(MakeShared<FString>(Name));
+		}
+		if (InCombo.IsValid())
+		{
+			InCombo->RefreshOptions();
+		}
+	};
+	TArray<FString> References = { FString() };
+	References.Append(Settings.TargetCultures);
+	TArray<FString> ProfileNames = { FString() };
 	for (const FDreamLocTranslateProfile& Each : Profiles)
 	{
-		ProfileChoices.Add(MakeShared<FString>(Each.Name));
+		ProfileNames.Add(Each.Name);
 	}
-	for (const TSharedPtr<SComboBox<TSharedPtr<FString>>>& Combo : { CultureCombo, ReferenceCombo, ProfileCombo })
-	{
-		if (Combo.IsValid())
-		{
-			Combo->RefreshOptions();
-		}
-	}
+	SetChoices(CultureChoices, Settings.TargetCultures, CultureCombo);
+	SetChoices(ReferenceChoices, References, ReferenceCombo);
+	SetChoices(ProfileChoices, ProfileNames, ProfileCombo);
 	StatusText = Warnings.Num() > 0 ? FText::FromString(FString::Join(Warnings, TEXT("; "))) : FText::GetEmpty();
 	Model.Load(DLocDirectory, OwnerDirectory, Culture, ReferenceCulture);
 	if (Header.IsValid())
@@ -700,6 +722,7 @@ void SDreamLocTranslateWindow::SetCulture(const FString& InCulture)
 	{
 		return;
 	}
+	UE_LOG(LogDreamLocTranslate, Verbose, TEXT("culture: %s -> %s"), *Culture, *InCulture);
 	KeepEdit();
 	Culture = InCulture;
 	Current.Reset();
