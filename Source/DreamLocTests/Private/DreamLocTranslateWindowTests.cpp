@@ -325,7 +325,11 @@ bool FDreamLocTranslateWindowClicksTest::RunTest(const FString& Parameters)
 		[
 			C->Window.ToSharedRef()
 		];
-	FSlateApplication::Get().AddWindow(C->Host.ToSharedRef(), /*bShowImmediately*/ true);
+	// Made hidden and moved before it is shown: the window is made at 0,0 whatever ScreenPosition says.
+	FSlateApplication::Get().AddWindow(C->Host.ToSharedRef(), /*bShowImmediately*/ false);
+	C->Host->MoveWindowTo(FVector2D(-20000.0, -20000.0));
+	C->Host->ShowWindow();
+	TestTrue(TEXT("the test's window off the screens"), C->Host->GetPositionInScreen().X < -10000.0f);
 	C->User = FSlateApplication::Get().FindOrCreateVirtualUser(5);
 	// The steps of a click, as `log LogDreamLocTranslate Verbose` shows them.
 	UE_SET_LOG_VERBOSITY(LogDreamLocTranslate, Verbose);
