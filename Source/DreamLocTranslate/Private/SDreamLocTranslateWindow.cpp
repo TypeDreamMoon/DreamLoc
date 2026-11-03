@@ -16,6 +16,8 @@
 #include "Misc/ScopeLock.h"
 #include "SourceCodeNavigation.h"
 #include "Styling/AppStyle.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Layout/WidgetPath.h"
 #include "Styling/StyleColors.h"
 #include "Types/ISlateMetaData.h"
 #include "Widgets/Input/SButton.h"
@@ -62,6 +64,37 @@ namespace DreamLocTranslateWindowLocal
 	FString OneLine(const FString& InText)
 	{
 		return InText.Replace(TEXT("\r\n"), TEXT("\\n")).Replace(TEXT("\n"), TEXT("\\n"));
+	}
+
+	/** The key a row is about, for the log. */
+	FString RowName(const FDreamLocTranslateRowItem& InItem)
+	{
+		return InItem.Row.Culture / InItem.Row.Namespace + TEXT(" ") + InItem.Row.Key;
+	}
+
+	/** A widget's last painted rectangle on the desktop, for the log. */
+	FString RectOf(const TWeakPtr<SWidget>& InWidget)
+	{
+		const TSharedPtr<SWidget> Widget = InWidget.Pin();
+		if (!Widget.IsValid())
+		{
+			return TEXT("(none)");
+		}
+		const FSlateRect Rect = Widget->GetPaintSpaceGeometry().GetLayoutBoundingRect();
+		return FString::Printf(TEXT("[%.0f..%.0f x %.0f..%.0f]%s"), Rect.Left, Rect.Right, Rect.Top, Rect.Bottom, Widget->IsEnabled() ? TEXT("") : TEXT(" disabled"));
+	}
+
+	/** The last few widgets of a path, leaf last: what a click lands on. */
+	FString DescribeLeaf(const FWidgetPath& InPath)
+	{
+		TArray<FString> Parts;
+		for (int32 Index = FMath::Max(0, InPath.Widgets.Num() - 4); Index < InPath.Widgets.Num(); ++Index)
+		{
+			const TSharedRef<SWidget>& Widget = InPath.Widgets[Index].Widget;
+			const TSharedPtr<FTagMetaData> Tag = Widget->GetMetaData<FTagMetaData>();
+			Parts.Add(Widget->GetTypeAsString() + (Tag.IsValid() ? TEXT("(") + Tag->Tag.ToString() + TEXT(")") : FString()));
+		}
+		return Parts.Num() > 0 ? FString::Join(Parts, TEXT(" > ")) : FString(TEXT("(nothing)"));
 	}
 
 	FText StatusOf(const FDreamLocTranslateRowItem& InItem)
@@ -131,6 +164,28 @@ namespace DreamLocTranslateWindowLocal
 			Item = InArgs._Item;
 			Window = InArgs._Window;
 			SMultiColumnTableRow<TSharedPtr<FDreamLocTranslateRowItem>>::Construct(FSuperRowType::FArguments().Padding(FMargin(0.0f, 1.0f)), InOwner);
+		}
+
+		// What a press in the row meets, step by step, for `log LogDreamLocTranslate Verbose`: where it went down, which
+		// widgets are under it, where the row's buttons were last painted.
+		virtual FReply OnPreviewMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+		{
+			if (UE_LOG_ACTIVE(LogDreamLocTranslate, Verbose))
+			{
+				const FVector2D At(MouseEvent.GetScreenSpacePosition());
+				const FWidgetPath Under = FSlateApplication::Get().LocateWindowUnderMouse(At, FSlateApplication::Get().GetInteractiveTopLevelWindows(), false,
+					MouseEvent.GetUserIndex());
+				UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: %s down at %.0f,%.0f (user %d%s), onto %s; Pass %s, Reject %s, Again %s"), *RowName(*Item),
+					*MouseEvent.GetEffectingButton().ToString(), At.X, At.Y, MouseEvent.GetUserIndex(), MouseEvent.IsTouchEvent() ? TEXT(", touch") : TEXT(""),
+					*DescribeLeaf(Under), *RectOf(PassButton), *RectOf(RejectButton), *RectOf(AgainButton));
+			}
+			return SMultiColumnTableRow<TSharedPtr<FDreamLocTranslateRowItem>>::OnPreviewMouseButtonDown(MyGeometry, MouseEvent);
+		}
+
+		virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+		{
+			UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: the row itself took the press (no button did)"), *RowName(*Item));
+			return SMultiColumnTableRow<TSharedPtr<FDreamLocTranslateRowItem>>::OnMouseButtonDown(MyGeometry, MouseEvent);
 		}
 
 		virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& InColumn) override
@@ -214,11 +269,13 @@ namespace DreamLocTranslateWindowLocal
 			{
 				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
 				const TWeakPtr<SDreamLocTranslateWindow> Owner = Window;
-				auto Button = [&Shown](const TCHAR* InTag, const FText& InLabel, const FText& InTip, TFunction<bool()> InCanDo, TFunction<void()> InDo) -> TSharedRef<SWidget>
+				auto Button = [&Shown](const TCHAR* InTag, const TCHAR* InName, const FText& InLabel, const FText& InTip, TFunction<bool()> InCanDo, TFunction<void()> InDo,
+					TWeakPtr<SWidget>& OutButton) -> TSharedRef<SWidget>
 				{
+					const FString Name = InName;
 					// On press, and without taking focus: a press can then not be undone before its release -- by the window being
 					// activated (which releases every pointer capture), by focus moving, by the row being laid out again.
-					return SNew(SButton)
+					const TSharedRef<SButton> Made = SNew(SButton)
 						.AddMetaData<FTagMetaData>(FTagMetaData(InTag))
 						.Text(InLabel)
 						.ToolTipText(InTip)
@@ -226,26 +283,37 @@ namespace DreamLocTranslateWindowLocal
 						.ClickMethod(EButtonClickMethod::MouseDown)
 						.IsFocusable(false)
 						.IsEnabled_Lambda([Shown, InCanDo]() { return !Shown->bBusy && InCanDo(); })
-						.OnClicked_Lambda([InDo]() { InDo(); return FReply::Handled(); });
+						.OnPressed_Lambda([Shown, Name]() { UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: %s pressed"), *RowName(*Shown), *Name); })
+						.OnClicked_Lambda([Shown, Name, InDo]()
+						{
+							UE_LOG(LogDreamLocTranslate, Verbose, TEXT("row %s: %s clicked"), *RowName(*Shown), *Name);
+							InDo();
+							return FReply::Handled();
+						});
+					OutButton = Made;
+					return Made;
 				};
 				return SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
 					[
-						Button(TEXT("DreamLocTranslate.Pass"), LOCTEXT("Pass", "Pass"),LOCTEXT("PassTip", "Mark the translation reviewed (state done)"),
+						Button(TEXT("DreamLocTranslate.Pass"), TEXT("Pass"), LOCTEXT("Pass", "Pass"), LOCTEXT("PassTip", "Mark the translation reviewed (state done)"),
 							[Shown]() { return !Shown->Row.NewText.IsEmpty() && Shown->Review != TEXT("passed"); },
-							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->PassRows({ Shown }); } })
+							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->PassRows({ Shown }); } },
+							PassButton)
 					]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
 					[
-						Button(TEXT("DreamLocTranslate.Reject"), LOCTEXT("Reject", "Reject"),LOCTEXT("RejectTip", "Clear the translation"),
+						Button(TEXT("DreamLocTranslate.Reject"), TEXT("Reject"), LOCTEXT("Reject", "Reject"), LOCTEXT("RejectTip", "Clear the translation"),
 							[Shown]() { return !Shown->Row.NewText.IsEmpty() && Shown->Review != TEXT("passed"); },
-							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RejectRows({ Shown }); } })
+							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RejectRows({ Shown }); } },
+							RejectButton)
 					]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
 					[
-						Button(TEXT("DreamLocTranslate.Again"), LOCTEXT("Again", "Again"),LOCTEXT("AgainTip", "Translate this entry again"),
+						Button(TEXT("DreamLocTranslate.Again"), TEXT("Again"), LOCTEXT("Again", "Again"), LOCTEXT("AgainTip", "Translate this entry again"),
 							[Shown, Owner]() { const TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin(); return Pinned.IsValid() && !Pinned->IsRunning() && Shown->Review != TEXT("passed"); },
-							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RetranslateRow(Shown); } })
+							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RetranslateRow(Shown); } },
+							AgainButton)
 					];
 			}
 			return SNullWidget::NullWidget;
@@ -254,6 +322,9 @@ namespace DreamLocTranslateWindowLocal
 	private:
 		TSharedPtr<FDreamLocTranslateRowItem> Item;
 		TWeakPtr<SDreamLocTranslateWindow> Window;
+		TWeakPtr<SWidget> PassButton;
+		TWeakPtr<SWidget> RejectButton;
+		TWeakPtr<SWidget> AgainButton;
 	};
 }
 
@@ -1015,10 +1086,13 @@ bool SDreamLocTranslateWindow::ApplyEdits(TConstArrayView<TSharedPtr<FDreamLocTr
 	}
 	if (Edits.IsEmpty())
 	{
+		UE_LOG(LogDreamLocTranslate, Verbose, TEXT("%s: %d row(s) asked, none to write (busy, or nothing to write)"), InReview, InItems.Num());
 		return false;
 	}
 	LastErrors.Reset();
 	const bool bWritten = DreamLocTranslateFlow::ApplyReview(DLocDirectory, Edits, LastErrors);
+	UE_LOG(LogDreamLocTranslate, Verbose, TEXT("%s: %d row(s) asked, %d written to %s%s%s"), InReview, InItems.Num(), Edits.Num(), *DLocDirectory,
+		bWritten ? TEXT("") : TEXT(": "), *FString::Join(LastErrors, TEXT("; ")));
 	for (const TSharedPtr<FDreamLocTranslateRowItem>& Item : Changed)
 	{
 		Item->Review = InReview;
@@ -1085,6 +1159,8 @@ bool SDreamLocTranslateWindow::RetranslateRow(const TSharedPtr<FDreamLocTranslat
 {
 	if (IsRunning() || !InItem.IsValid() || InItem->Review == TEXT("passed"))
 	{
+		UE_LOG(LogDreamLocTranslate, Verbose, TEXT("again: not now (%s)"), IsRunning() ? TEXT("a run is under way") : !InItem.IsValid() ? TEXT("no row")
+			: TEXT("the row is passed"));
 		return false;
 	}
 	bool bNoFiles = false;
@@ -1096,6 +1172,8 @@ bool SDreamLocTranslateWindow::RetranslateRow(const TSharedPtr<FDreamLocTranslat
 	Request.bIncludeStale = true;
 	Request.bIncludeMachine = true;
 	InItem->bBusy = true;
+	UE_LOG(LogDreamLocTranslate, Verbose, TEXT("again: %s with %s"), *DreamLocTranslateWindowLocal::RowName(*InItem),
+		Request.Profile.IsEmpty() ? TEXT("each culture's own translator") : *Request.Profile);
 	RunRequest(Request, InItem);
 	return true;
 }
