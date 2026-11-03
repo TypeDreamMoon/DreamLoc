@@ -87,9 +87,9 @@ namespace DreamLocTranslateFlow
 	};
 
 	/**
-	 * Writes the decisions into the .dloc files under InDLocDirectory. A reviewed entry (done) is only ever set done
-	 * again; a stale entry made current loses its `prev`. False with OutErrors when a file does not read or write, or an
-	 * entry is not there.
+	 * Writes a person's decisions into the .dloc files under InDLocDirectory: any entry, a reviewed one too (only the
+	 * machine's write-back leaves those alone); a stale entry decided on loses its `prev`. False with OutErrors when a file
+	 * does not read or write, or an entry is not there.
 	 */
 	DREAMLOCTRANSLATE_API bool ApplyReview(const FString& InDLocDirectory, TConstArrayView<FReviewEdit> InEdits, TArray<FString>& OutErrors);
 
@@ -103,7 +103,10 @@ namespace DreamLocTranslateFlow
 	/** A translation with plural, ordinal or gender forms: a machine translator cannot keep them. */
 	DREAMLOCTRANSLATE_API bool HasForms(const FString& InSource);
 
-	/** What the checks say about a translation of InUnit: empty when nothing. */
+	/** What the checks say about a translation of InUnit: empty when nothing. On the game thread the tools that lay texts out have their say too. */
 	DREAMLOCTRANSLATE_API FString CheckTranslation(const FDreamLocTranslateUnit& InUnit, const FString& InText, const FString& InCulture,
 		const FDreamLocTerms& InTerms, const FString& InOwnerDirectory);
+
+	/** The content checks alone (no layout): cheap enough for every entry of a culture. */
+	DREAMLOCTRANSLATE_API FString CheckContent(const FDreamLocTranslateUnit& InUnit, const FString& InText, const FString& InCulture, const FDreamLocTerms& InTerms);
 }

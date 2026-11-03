@@ -836,6 +836,15 @@ FString DreamLocTranslateFlow::CheckTranslation(const FDreamLocTranslateUnit& In
 	return Failing.IsEmpty() ? Notes : Notes.IsEmpty() ? Failing : Failing + TEXT("; ") + Notes;
 }
 
+FString DreamLocTranslateFlow::CheckContent(const FDreamLocTranslateUnit& InUnit, const FString& InText, const FString& InCulture, const FDreamLocTerms& InTerms)
+{
+	using namespace DreamLocTranslateFlowLocal;
+	FString Failing;
+	FString Notes;
+	CheckOne(InUnit, {}, InText, InCulture, InTerms, FString(), {}, Failing, Notes);
+	return Failing.IsEmpty() ? Notes : Notes.IsEmpty() ? Failing : Failing + TEXT("; ") + Notes;
+}
+
 FDreamLocTranslateEstimate DreamLocTranslateFlow::Estimate(const FDreamLocTranslateRequest& InRequest)
 {
 	using namespace DreamLocTranslateFlowLocal;
@@ -1150,11 +1159,6 @@ bool DreamLocTranslateFlow::ApplyReview(const FString& InDLocDirectory, TConstAr
 			if (Entry == nullptr)
 			{
 				OutErrors.Add(FString::Printf(TEXT("DLoc/%s has no entry '%s' (namespace %s)"), *File.Key, *Edit->Key, *Edit->Namespace));
-				continue;
-			}
-			if (Entry->GetState() == EDreamLocState::Done && !(Edit->Text.IsSet() && Edit->State == TEXT("done")))
-			{
-				OutErrors.Add(FString::Printf(TEXT("DLoc/%s: '%s' is reviewed (done) and is left as it is"), *File.Key, *Edit->Key));
 				continue;
 			}
 			if (Edit->Text.IsSet())
