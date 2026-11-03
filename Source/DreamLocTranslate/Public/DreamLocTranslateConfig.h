@@ -32,4 +32,11 @@ namespace DreamLocTranslateConfig
 	 * window writes back when the project's translation settings change. A file without the section gets it at the end.
 	 */
 	DREAMLOCTRANSLATE_API FString WriteTranslateSection(const FString& InDLocText, const FDreamLocSettings& InSettings);
+
+	/**
+	 * InDLocText with only the [Translate] settings that differ between InBefore and InAfter written: each changed key's
+	 * lines where they stood (a new key at the end of the section, one back to its default taken out), every other line --
+	 * comments, the order, keys left alone -- as it was. What Project Settings > Plugins > DreamLoc writes back.
+	 */
+	DREAMLOCTRANSLATE_API FString WriteTranslateChanges(const FString& InDLocText, const FDreamLocSettings& InBefore, const FDreamLocSettings& InAfter);
 }

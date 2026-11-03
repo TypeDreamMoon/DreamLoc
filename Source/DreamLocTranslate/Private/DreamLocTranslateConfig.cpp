@@ -2,6 +2,7 @@
 
 #include "DreamLocTranslateConfig.h"
 
+#include "Algo/StableSort.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformMisc.h"
 #include "HAL/PlatformProcess.h"
@@ -393,4 +394,200 @@ FString DreamLocTranslateConfig::WriteTranslateSection(const FString& InDLocText
 		Out.Append(Section);
 	}
 	return FString::Join(Out, TEXT("\n")) + TEXT("\n");
+}
+
+namespace DreamLocTranslateConfigLocal
+{
+	/** The [Translate] lines the settings are written as, a key at a time, in the order a new section has them. */
+	TArray<TPair<FString, TArray<FString>>> TranslateLines(const FDreamLocSettings& InSettings)
+	{
+		const FDreamLocSettings Defaults;
+		TArray<TPair<FString, TArray<FString>>> Out;
+		auto Add = [&Out](const FString& InKey, TArray<FString> InLines)
+		{
+			Out.Emplace(InKey, MoveTemp(InLines));
+		};
+		if (!InSettings.TranslateProfile.IsEmpty())
+		{
+			Add(TEXT("Profile"), { TEXT("Profile=") + InSettings.TranslateProfile });
+		}
+		for (const TPair<FString, FString>& Pair : InSettings.TranslateProfileByCulture)
+		{
+			Add(TEXT("Profile.") + Pair.Key, { FString::Printf(TEXT("Profile.%s=%s"), *Pair.Key, *Pair.Value) });
+		}
+		if (!InSettings.TranslateFallback.IsEmpty())
+		{
+			Add(TEXT("Fallback"), { TEXT("Fallback=") + InSettings.TranslateFallback });
+		}
+		if (InSettings.TranslateBatchSize != Defaults.TranslateBatchSize)
+		{
+			Add(TEXT("BatchSize"), { FString::Printf(TEXT("BatchSize=%d"), InSettings.TranslateBatchSize) });
+		}
+		if (InSettings.TranslateConcurrency != Defaults.TranslateConcurrency)
+		{
+			Add(TEXT("Concurrency"), { FString::Printf(TEXT("Concurrency=%d"), InSettings.TranslateConcurrency) });
+		}
+		if (InSettings.TranslateRetry != Defaults.TranslateRetry)
+		{
+			Add(TEXT("Retry"), { FString::Printf(TEXT("Retry=%d"), InSettings.TranslateRetry) });
+		}
+		if (InSettings.TranslateStyle != Defaults.TranslateStyle)
+		{
+			Add(TEXT("Style"), { TEXT("Style=") + InSettings.TranslateStyle });
+		}
+		if (InSettings.TranslateLocalOnly.Num() > 0)
+		{
+			TArray<FString> Lines;
+			for (int32 Index = 0; Index < InSettings.TranslateLocalOnly.Num(); ++Index)
+			{
+				Lines.Add((Index == 0 ? TEXT("LocalOnly=") : TEXT("+LocalOnly=")) + InSettings.TranslateLocalOnly[Index]);
+			}
+			Add(TEXT("LocalOnly"), MoveTemp(Lines));
+		}
+		return Out;
+	}
+
+	/** The key a setting line sets (`+LocalOnly=a` sets LocalOnly); empty for a comment, a blank line, a section. */
+	FString KeyOf(const FString& InLine)
+	{
+		FString Line = InLine.TrimStartAndEnd();
+		if (Line.IsEmpty() || Line.StartsWith(TEXT(";")) || Line.StartsWith(TEXT("#")) || Line.StartsWith(TEXT("[")))
+		{
+			return FString();
+		}
+		while (!Line.IsEmpty() && (Line[0] == TEXT('+') || Line[0] == TEXT('-') || Line[0] == TEXT('.') || Line[0] == TEXT('!')))
+		{
+			Line.RightChopInline(1);
+		}
+		FString Key;
+		return Line.Split(TEXT("="), &Key, nullptr) ? Key.TrimStartAndEnd() : Line;
+	}
+}
+
+FString DreamLocTranslateConfig::WriteTranslateChanges(const FString& InDLocText, const FDreamLocSettings& InBefore, const FDreamLocSettings& InAfter)
+{
+	using namespace DreamLocTranslateConfigLocal;
+	const TArray<TPair<FString, TArray<FString>>> Before = TranslateLines(InBefore);
+	const TArray<TPair<FString, TArray<FString>>> After = TranslateLines(InAfter);
+	auto Find = [](const TArray<TPair<FString, TArray<FString>>>& InLines, const FString& InKey) -> const TArray<FString>*
+	{
+		const TPair<FString, TArray<FString>>* Found = InLines.FindByPredicate([&InKey](const TPair<FString, TArray<FString>>& InPair) { return InPair.Key == InKey; });
+		return Found != nullptr ? &Found->Value : nullptr;
+	};
+	// The keys whose lines differ, in the order a new section has them, then those taken out.
+	TArray<FString> Changed;
+	for (const TPair<FString, TArray<FString>>& Pair : After)
+	{
+		const TArray<FString>* Was = Find(Before, Pair.Key);
+		if (Was == nullptr || *Was != Pair.Value)
+		{
+			Changed.Add(Pair.Key);
+		}
+	}
+	for (const TPair<FString, TArray<FString>>& Pair : Before)
+	{
+		if (Find(After, Pair.Key) == nullptr)
+		{
+			Changed.AddUnique(Pair.Key);
+		}
+	}
+	if (Changed.IsEmpty())
+	{
+		return InDLocText;
+	}
+
+	const FString LineEnd = InDLocText.Contains(TEXT("\r\n")) ? TEXT("\r\n") : TEXT("\n");
+	TArray<FString> Lines;
+	InDLocText.ParseIntoArrayLines(Lines, /*InCullEmpty*/ false);
+	// The file's last line end makes no line of its own: one is put back at the end.
+	if (Lines.Num() > 0 && Lines.Last().IsEmpty() && (InDLocText.EndsWith(TEXT("\n")) || InDLocText.EndsWith(TEXT("\r"))))
+	{
+		Lines.Pop();
+	}
+	int32 SectionStart = INDEX_NONE;
+	int32 SectionEnd = INDEX_NONE;
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		const FString Trimmed = Lines[Index].TrimStartAndEnd();
+		if (Trimmed.StartsWith(TEXT("[")) && Trimmed.EndsWith(TEXT("]")))
+		{
+			if (SectionStart != INDEX_NONE)
+			{
+				SectionEnd = Index;
+				break;
+			}
+			if (Trimmed.Mid(1, Trimmed.Len() - 2).TrimStartAndEnd() == TEXT("Translate"))
+			{
+				SectionStart = Index;
+			}
+		}
+	}
+	if (SectionStart == INDEX_NONE)
+	{
+		while (Lines.Num() > 0 && Lines.Last().TrimStartAndEnd().IsEmpty())
+		{
+			Lines.Pop();
+		}
+		if (Lines.Num() > 0)
+		{
+			Lines.Add(FString());
+		}
+		Lines.Add(TEXT("[Translate]"));
+		SectionStart = Lines.Num() - 1;
+		SectionEnd = Lines.Num();
+	}
+	else if (SectionEnd == INDEX_NONE)
+	{
+		SectionEnd = Lines.Num();
+	}
+
+	// The changed keys' old lines out, each key's first place kept for its new lines.
+	TMap<FString, int32> FirstAt;
+	TArray<FString> Kept;
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		const bool bInSection = Index > SectionStart && Index < SectionEnd;
+		const FString Key = bInSection ? KeyOf(Lines[Index]) : FString();
+		if (!Key.IsEmpty() && Changed.Contains(Key))
+		{
+			if (!FirstAt.Contains(Key))
+			{
+				FirstAt.Add(Key, Kept.Num());
+			}
+			continue;
+		}
+		Kept.Add(Lines[Index]);
+	}
+	// The section's end in what is kept: after its last line that is not blank.
+	int32 End = SectionStart + 1;
+	for (int32 Index = SectionStart + 1; Index < Kept.Num(); ++Index)
+	{
+		const FString Trimmed = Kept[Index].TrimStartAndEnd();
+		if (Trimmed.StartsWith(TEXT("[")) && Trimmed.EndsWith(TEXT("]")))
+		{
+			break;
+		}
+		if (!Trimmed.IsEmpty())
+		{
+			End = Index + 1;
+		}
+	}
+	// Inserted from the last place to the first, so the places before stay where they are.
+	TArray<TPair<int32, TArray<FString>>> Inserts;
+	for (const FString& Key : Changed)
+	{
+		const TArray<FString>* Now = Find(After, Key);
+		if (Now == nullptr)
+		{
+			continue;
+		}
+		const int32* At = FirstAt.Find(Key);
+		Inserts.Emplace(At != nullptr ? *At : End, *Now);
+	}
+	Algo::StableSortBy(Inserts, [](const TPair<int32, TArray<FString>>& InInsert) { return InInsert.Key; });
+	for (int32 Index = Inserts.Num() - 1; Index >= 0; --Index)
+	{
+		Kept.Insert(Inserts[Index].Value, Inserts[Index].Key);
+	}
+	return FString::Join(Kept, *LineEnd) + LineEnd;
 }
