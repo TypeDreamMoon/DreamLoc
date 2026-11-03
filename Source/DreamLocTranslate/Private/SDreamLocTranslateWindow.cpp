@@ -17,6 +17,7 @@
 #include "SourceCodeNavigation.h"
 #include "Styling/AppStyle.h"
 #include "Styling/StyleColors.h"
+#include "Types/ISlateMetaData.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
@@ -198,31 +199,36 @@ namespace DreamLocTranslateWindowLocal
 			{
 				const TSharedPtr<FDreamLocTranslateRowItem> Shown = Item;
 				const TWeakPtr<SDreamLocTranslateWindow> Owner = Window;
-				auto Button = [&Shown](const FText& InLabel, const FText& InTip, TFunction<bool()> InCanDo, TFunction<void()> InDo) -> TSharedRef<SWidget>
+				auto Button = [&Shown](const TCHAR* InTag, const FText& InLabel, const FText& InTip, TFunction<bool()> InCanDo, TFunction<void()> InDo) -> TSharedRef<SWidget>
 				{
+					// On press, and without taking focus: a press can then not be undone before its release -- by the window being
+					// activated (which releases every pointer capture), by focus moving, by the row being laid out again.
 					return SNew(SButton)
+						.AddMetaData<FTagMetaData>(FTagMetaData(InTag))
 						.Text(InLabel)
 						.ToolTipText(InTip)
 						.ContentPadding(FMargin(4.0f, 0.0f))
+						.ClickMethod(EButtonClickMethod::MouseDown)
+						.IsFocusable(false)
 						.IsEnabled_Lambda([Shown, InCanDo]() { return !Shown->bBusy && InCanDo(); })
 						.OnClicked_Lambda([InDo]() { InDo(); return FReply::Handled(); });
 				};
 				return SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
 					[
-						Button(LOCTEXT("Pass", "Pass"), LOCTEXT("PassTip", "Mark the translation reviewed (state done)"),
+						Button(TEXT("DreamLocTranslate.Pass"), LOCTEXT("Pass", "Pass"),LOCTEXT("PassTip", "Mark the translation reviewed (state done)"),
 							[Shown]() { return !Shown->Row.NewText.IsEmpty() && Shown->Review != TEXT("passed"); },
 							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->PassRows({ Shown }); } })
 					]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
 					[
-						Button(LOCTEXT("Reject", "Reject"), LOCTEXT("RejectTip", "Clear the translation"),
+						Button(TEXT("DreamLocTranslate.Reject"), LOCTEXT("Reject", "Reject"),LOCTEXT("RejectTip", "Clear the translation"),
 							[Shown]() { return !Shown->Row.NewText.IsEmpty() && Shown->Review != TEXT("passed"); },
 							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RejectRows({ Shown }); } })
 					]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(1.0f)
 					[
-						Button(LOCTEXT("Again", "Again"), LOCTEXT("AgainTip", "Translate this entry again"),
+						Button(TEXT("DreamLocTranslate.Again"), LOCTEXT("Again", "Again"),LOCTEXT("AgainTip", "Translate this entry again"),
 							[Shown, Owner]() { const TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin(); return Pinned.IsValid() && !Pinned->IsRunning() && Shown->Review != TEXT("passed"); },
 							[Shown, Owner]() { if (TSharedPtr<SDreamLocTranslateWindow> Pinned = Owner.Pin()) { Pinned->RetranslateRow(Shown); } })
 					];
@@ -437,14 +443,15 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeTranslatePage()
 	};
 
 	TSharedRef<SHeaderRow> Header = SNew(SHeaderRow)
-		+ SHeaderRow::Column(ColumnFile).DefaultLabel(LOCTEXT("ColumnFile", "File")).FillWidth(0.12f)
-		+ SHeaderRow::Column(ColumnKey).DefaultLabel(LOCTEXT("ColumnKey", "Key")).FillWidth(0.12f)
-		+ SHeaderRow::Column(ColumnSource).DefaultLabel(LOCTEXT("ColumnSource", "Source")).FillWidth(0.18f)
-		+ SHeaderRow::Column(ColumnOld).DefaultLabel(LOCTEXT("ColumnOld", "Old translation")).FillWidth(0.14f)
-		+ SHeaderRow::Column(ColumnNew).DefaultLabel(LOCTEXT("ColumnNew", "New translation")).FillWidth(0.2f)
-		+ SHeaderRow::Column(ColumnCheck).DefaultLabel(LOCTEXT("ColumnCheck", "Checks")).FillWidth(0.16f)
-		+ SHeaderRow::Column(ColumnBackend).DefaultLabel(LOCTEXT("ColumnBackend", "Translator")).FillWidth(0.08f)
-		+ SHeaderRow::Column(ColumnActions).DefaultLabel(FText::GetEmpty()).FixedWidth(170.0f);
+		+ SHeaderRow::Column(ColumnFile).DefaultLabel(LOCTEXT("ColumnFile", "File")).FillWidth(0.13f)
+		+ SHeaderRow::Column(ColumnKey).DefaultLabel(LOCTEXT("ColumnKey", "Key")).FillWidth(0.13f)
+		+ SHeaderRow::Column(ColumnSource).DefaultLabel(LOCTEXT("ColumnSource", "Source")).FillWidth(0.2f)
+		+ SHeaderRow::Column(ColumnOld).DefaultLabel(LOCTEXT("ColumnOld", "Old translation")).FillWidth(0.15f)
+		+ SHeaderRow::Column(ColumnNew).DefaultLabel(LOCTEXT("ColumnNew", "New translation")).FillWidth(0.22f)
+		+ SHeaderRow::Column(ColumnCheck).DefaultLabel(LOCTEXT("ColumnCheck", "Checks")).FillWidth(0.17f)
+		// Fixed: a row lays its fill columns out by their share alone, so a short name in a narrow window would be cut.
+		+ SHeaderRow::Column(ColumnBackend).DefaultLabel(LOCTEXT("ColumnBackend", "Translator")).FixedWidth(120.0f)
+		+ SHeaderRow::Column(ColumnActions).DefaultLabel(FText::GetEmpty()).FixedWidth(224.0f);
 
 	return SNew(SSplitter)
 		.Orientation(Orient_Vertical)
