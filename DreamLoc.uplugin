@@ -27,6 +27,11 @@
 			"LoadingPhase": "Default"
 		},
 		{
+			"Name": "DreamLocTranslate",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		},
+		{
 			"Name": "DreamLocTests",
 			"Type": "Editor",
 			"LoadingPhase": "Default"
