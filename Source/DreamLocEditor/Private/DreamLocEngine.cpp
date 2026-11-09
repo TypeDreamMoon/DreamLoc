@@ -287,6 +287,9 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 		return false;
 	}
 
+	// The engine writes a C++ file's path relative to its own base, the project's folder, whoever owns the file: a
+	// plugin's are `Plugins/<name>/Source/...`, and become relative to the plugin below.
+	const FString SourceBase = FullDirectory(UGatherTextCommandletBase::GetProjectBasePath());
 	TMap<FString, TArray<FGathered>> ByFile;
 	TArray<FString> FileOrder;
 	// A text once per file: a category is one text however many fields of a header are in it. (The same key with
@@ -303,7 +306,7 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 			if (!SplitAsset(Context.SourceLocation, Project, File, Where) && !SplitScript(Context.SourceLocation, Project, File, Where, Kind))
 			{
 				SplitLine(Context.SourceLocation, File, Line);
-				File = RelativeTo(File, Project);
+				File = RelativeTo(FPaths::IsRelative(File) ? SourceBase / File : File, Project);
 				Where.Reset();
 			}
 			if (File.IsEmpty())

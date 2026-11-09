@@ -34,4 +34,7 @@ public:
 	/** How the panel fits its box when the box is not its shape. */
 	UPROPERTY(EditAnywhere, Category = "Sample", meta = (ShortTooltip = "How it fits"))
 	EDreamLocSampleFit Fit = EDreamLocSampleFit::Fill;
+
+	/** A LOCTEXT beside the meta-data: the gather puts both into this header's manifest. */
+	static FText GetTitle() { return NSLOCTEXT("DreamLocSample", "Title", "Sample Panel Title"); }
 };

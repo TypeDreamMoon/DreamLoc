@@ -83,6 +83,9 @@ bool FDreamLocGatherMetaDataTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestEqual(TEXT("its source, relative to the plugin"), Manifest.Source, FString(TEXT("Source/DreamLocTests/Private/MetaDataSample/DreamLocMetaDataSample.h")));
+	// The engine writes a LOCTEXT's file relative to the project, `Plugins/DreamLoc/Source/...`: it is the plugin's file.
+	TestEqual(TEXT("the header's LOCTEXT, in the same manifest"), SourceOf(Manifest, TEXT("DreamLocSample"), TEXT("Title")), FString(TEXT("Sample Panel Title")));
+	TestEqual(TEXT("nothing under the project's path for it"), DreamLocExtract::FindManifestFiles(Work / TEXT("extract/Engine")).Num(), 1);
 
 	// The keys the editor itself makes when it shows these: UField / FField / UEnum GetFullGroupName, as in Class.cpp,
 	// Field.cpp and Enum.cpp.
@@ -123,12 +126,22 @@ bool FDreamLocGatherMetaDataTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("an enum value's kind"), Value->Kind, FString(TEXT("DisplayName (EnumEntry)")));
 	}
 
-	// Without MetaData: none of it.
+	// Without MetaData: the LOCTEXT alone.
 	Options.bMetaData = false;
 	const DreamLocEngine::FGatherResult Plain = DreamLocEngine::Gather(Options);
 	TestTrue(TEXT("the plain gather ran"), Plain.bSucceeded);
-	TestEqual(TEXT("a header without LOCTEXT has no texts then"), Plain.Texts, 0);
-	TestFalse(TEXT("and its manifest is gone"), IFileManager::Get().FileExists(*Path));
+	TestEqual(TEXT("the LOCTEXT alone then"), Plain.Texts, 1);
+	FDreamLocExtractManifest PlainManifest;
+	TestTrue(TEXT("its manifest reads"), DreamLocExtract::LoadFile(Path, PlainManifest, Error));
+	TestEqual(TEXT("one namespace, the LOCTEXT's"), PlainManifest.Namespaces.Num(), 1);
+
+	// dloc.ini's excludes are relative to the plugin, and leave out its LOCTEXT and meta-data alike.
+	Options.bMetaData = true;
+	Options.ExcludePaths = { TEXT("Source/DreamLocTests/Private/MetaDataSample/*") };
+	const DreamLocEngine::FGatherResult Excluded = DreamLocEngine::Gather(Options);
+	TestTrue(TEXT("the gather with the folder left out ran"), Excluded.bSucceeded);
+	TestEqual(TEXT("no texts"), Excluded.Texts, 0);
+	TestFalse(TEXT("and the header's manifest is gone"), IFileManager::Get().FileExists(*Path));
 	return true;
 }
 
