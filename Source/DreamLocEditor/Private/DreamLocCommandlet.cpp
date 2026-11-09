@@ -479,7 +479,7 @@ namespace DreamLocCommandletLocal
 		{
 			Translations += Pair.Value;
 		}
-		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc bake %s: %d target(s), %d culture(s), %d translation(s), %d source text(s), %d file(s) %s, %d error(s), %d warning(s)"),
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc bake: %s, %d target(s), %d culture(s), %d translation(s), %d source text(s), %d file(s) %s, %d error(s), %d warning(s)"),
 			*InOwner.PluginName, Result.Targets.Num(), Result.Translations.Num(), Translations, Result.Sources, Result.Files.Num(),
 			bInDryRun ? TEXT("to write") : TEXT("written"), CountErrors(Result.Messages), CountWarnings(Result.Messages));
 		return Result.bSucceeded && CountErrors(Result.Messages) == 0 ? 0 : 1;
