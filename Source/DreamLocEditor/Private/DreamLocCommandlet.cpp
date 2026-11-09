@@ -215,7 +215,58 @@ namespace DreamLocCommandletLocal
 		return Run.Errors > 0 ? 1 : 0;
 	}
 
-	int32 RunShow(const FString& InCulture, const FString& InRootArgument)
+	/** Whose sources and translations a command works on: the project's, or with -Plugin=<name> a plugin's own. */
+	struct FOwner
+	{
+		FString Directory;
+		FString DLocDirectory;
+		FDreamLocSettings Settings;
+		/** The plugin's name; empty for the project. */
+		FString PluginName;
+	};
+
+	/**
+	 * A plugin's own DLoc/dloc.ini when it has one; else the project's cultures, with the gather's folders the default
+	 * ones (the project's are relative to the project).
+	 */
+	bool ResolveOwner(const FString& InPlugin, FOwner& OutOwner)
+	{
+		const FDreamLocSettings ProjectSettings = FDreamLocSettings::LoadFromDirectory(FDreamLocTextSource::GetProjectDirectory());
+		if (InPlugin.IsEmpty())
+		{
+			OutOwner.Directory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+			OutOwner.DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
+			OutOwner.Settings = ProjectSettings;
+			return true;
+		}
+		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(InPlugin);
+		if (!Plugin.IsValid())
+		{
+			UE_LOG(LogDreamLocCommandlet, Display, TEXT("error: there is no plugin '%s'"), *InPlugin);
+			return false;
+		}
+		OutOwner.Directory = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir());
+		OutOwner.DLocDirectory = OutOwner.Directory / TEXT("DLoc");
+		OutOwner.PluginName = Plugin->GetName();
+		if (IFileManager::Get().FileExists(*(OutOwner.DLocDirectory / FDreamLocSettings::FileName)))
+		{
+			OutOwner.Settings = FDreamLocSettings::LoadFromDirectory(OutOwner.DLocDirectory);
+		}
+		else
+		{
+			const FDreamLocSettings Defaults;
+			OutOwner.Settings = ProjectSettings;
+			OutOwner.Settings.GatherSourcePaths = Defaults.GatherSourcePaths;
+			OutOwner.Settings.GatherContentPaths = Defaults.GatherContentPaths;
+			OutOwner.Settings.GatherExcludePaths = Defaults.GatherExcludePaths;
+			OutOwner.Settings.bGatherEditorOnlyData = Defaults.bGatherEditorOnlyData;
+			OutOwner.Settings.bGatherMetaData = Defaults.bGatherMetaData;
+			OutOwner.Settings.PublishLoadingPolicy = Defaults.PublishLoadingPolicy;
+		}
+		return true;
+	}
+
+	int32 RunShow(const FString& InCulture, const FString& InRootArgument, const FOwner& InOwner)
 	{
 		if (!FDreamLocTextSource::IsKnownCulture(InCulture))
 		{
@@ -224,11 +275,7 @@ namespace DreamLocCommandletLocal
 			return 1;
 		}
 		TArray<FDreamLocLayer> Layers;
-		if (InRootArgument.IsEmpty())
-		{
-			Layers = FDreamLocTextSource::FindLayers();
-		}
-		else
+		if (!InRootArgument.IsEmpty())
 		{
 			for (const FString& Root : GetRoots(InRootArgument))
 			{
@@ -238,7 +285,15 @@ namespace DreamLocCommandletLocal
 				Layer.Directory = Root;
 			}
 		}
-		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(FDreamLocTextSource::GetProjectDirectory());
+		else if (!InOwner.PluginName.IsEmpty())
+		{
+			Layers.Add(FDreamLocLayer{ 0, TEXT("Plugin.") + InOwner.PluginName, InOwner.DLocDirectory });
+		}
+		else
+		{
+			Layers = FDreamLocTextSource::FindLayers();
+		}
+		const FDreamLocSettings& Settings = InOwner.Settings;
 		FDreamLocTextSource Source(Layers, Settings);
 		const TArray<FString> Prioritized = FInternationalization::Get().GetPrioritizedCultureNames(InCulture);
 		FTextLocalizationResource Resource;
@@ -331,57 +386,6 @@ namespace DreamLocCommandletLocal
 		return Cultures;
 	}
 
-	/** Whose sources and translations a command works on: the project's, or with -Plugin=<name> a plugin's own. */
-	struct FOwner
-	{
-		FString Directory;
-		FString DLocDirectory;
-		FDreamLocSettings Settings;
-		/** The plugin's name; empty for the project. */
-		FString PluginName;
-	};
-
-	/**
-	 * A plugin's own DLoc/dloc.ini when it has one; else the project's cultures, with the gather's folders the default
-	 * ones (the project's are relative to the project).
-	 */
-	bool ResolveOwner(const FString& InPlugin, FOwner& OutOwner)
-	{
-		const FDreamLocSettings ProjectSettings = FDreamLocSettings::LoadFromDirectory(FDreamLocTextSource::GetProjectDirectory());
-		if (InPlugin.IsEmpty())
-		{
-			OutOwner.Directory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
-			OutOwner.DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
-			OutOwner.Settings = ProjectSettings;
-			return true;
-		}
-		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(InPlugin);
-		if (!Plugin.IsValid())
-		{
-			UE_LOG(LogDreamLocCommandlet, Display, TEXT("error: there is no plugin '%s'"), *InPlugin);
-			return false;
-		}
-		OutOwner.Directory = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir());
-		OutOwner.DLocDirectory = OutOwner.Directory / TEXT("DLoc");
-		OutOwner.PluginName = Plugin->GetName();
-		if (IFileManager::Get().FileExists(*(OutOwner.DLocDirectory / FDreamLocSettings::FileName)))
-		{
-			OutOwner.Settings = FDreamLocSettings::LoadFromDirectory(OutOwner.DLocDirectory);
-		}
-		else
-		{
-			const FDreamLocSettings Defaults;
-			OutOwner.Settings = ProjectSettings;
-			OutOwner.Settings.GatherSourcePaths = Defaults.GatherSourcePaths;
-			OutOwner.Settings.GatherContentPaths = Defaults.GatherContentPaths;
-			OutOwner.Settings.GatherExcludePaths = Defaults.GatherExcludePaths;
-			OutOwner.Settings.bGatherEditorOnlyData = Defaults.bGatherEditorOnlyData;
-			OutOwner.Settings.bGatherMetaData = Defaults.bGatherMetaData;
-			OutOwner.Settings.PublishLoadingPolicy = Defaults.PublishLoadingPolicy;
-		}
-		return true;
-	}
-
 	int32 RunGather(const FOwner& InOwner)
 	{
 		DreamLocEngine::FGatherOptions Options = DreamLocEngine::MakeGatherOptions(InOwner.Settings);
@@ -413,10 +417,10 @@ namespace DreamLocCommandletLocal
 		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
 	}
 
-	int32 RunMigrate(const DreamLocSync::FMigrateRequest& InRequest)
+	int32 RunMigrate(const DreamLocSync::FMigrateRequest& InRequest, const FOwner& InOwner)
 	{
-		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
-		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		const FString& DLocDirectory = InOwner.DLocDirectory;
+		const FDreamLocSettings& Settings = InOwner.Settings;
 		FDreamLocSyncOutput Output;
 		if (InRequest.FromKey.IsEmpty() || InRequest.ToKey.IsEmpty())
 		{
@@ -442,7 +446,7 @@ namespace DreamLocCommandletLocal
 	{
 		const FDreamLocSyncOutput Output = DreamLocEngine::ImportTarget(InOptions);
 		ReportLines(Output.Messages);
-		ReportChanges(Output, FDreamLocTextSource::GetProjectDirectory(), InOptions.bDryRun);
+		ReportChanges(Output, InOptions.DLocDirectory.IsEmpty() ? FDreamLocTextSource::GetProjectDirectory() : InOptions.DLocDirectory, InOptions.bDryRun);
 		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc import: %d translation(s) into existing entries (%d stale), %d file(s) %s, %d error(s), %d warning(s)"),
 			Output.Added, Output.Outdated, Output.NumWrites(), InOptions.bDryRun ? TEXT("to write") : TEXT("written"), Output.NumErrors(), Output.NumWarnings());
 		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
@@ -485,10 +489,10 @@ namespace DreamLocCommandletLocal
 		return Result.bSucceeded && CountErrors(Result.Messages) == 0 ? 0 : 1;
 	}
 
-	int32 RunPrune(bool bInDryRun)
+	int32 RunPrune(const FOwner& InOwner, bool bInDryRun)
 	{
-		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
-		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		const FString& DLocDirectory = InOwner.DLocDirectory;
+		const FDreamLocSettings& Settings = InOwner.Settings;
 		FDreamLocSyncOutput Output = DreamLocPublish::Prune(DreamLocSync::ReadFiles(DLocDirectory, Settings.TargetCultures), DLocDirectory);
 		if (!Output.bBlocked && !bInDryRun)
 		{
@@ -501,10 +505,11 @@ namespace DreamLocCommandletLocal
 		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
 	}
 
-	int32 RunExport(const FString& InCulture, const FString& InOnly, const FString& InFormat, const FString& InOut, const FString& InFiles, const FString& InReferences)
+	int32 RunExport(const FOwner& InOwner, const FString& InCulture, const FString& InOnly, const FString& InFormat, const FString& InOut, const FString& InFiles,
+		const FString& InReferences)
 	{
-		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
-		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		const FString& DLocDirectory = InOwner.DLocDirectory;
+		const FDreamLocSettings& Settings = InOwner.Settings;
 		TArray<FDreamLocReportLine> Messages;
 		const TOptional<EDreamLocExchangeFormat> Format = DreamLocExchange::FormatOfPath(TEXT("x.") + (InFormat.IsEmpty() ? FString(TEXT("json")) : InFormat));
 		if (InCulture.IsEmpty() || !Format.IsSet())
@@ -520,7 +525,7 @@ namespace DreamLocCommandletLocal
 		Options.References = SplitCultures(InReferences);
 		const FString ProjectDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
 		// The manifests say what each text is and what the source tool knows about it (a line's speaker...).
-		for (const FString& Path : DreamLocExtract::FindManifestFiles(DreamLocExtract::GetExtractDirectory(ProjectDirectory)))
+		for (const FString& Path : DreamLocExtract::FindManifestFiles(DreamLocExtract::GetExtractDirectory(InOwner.Directory)))
 		{
 			FDreamLocExtractManifest Manifest;
 			FString Error;
@@ -532,7 +537,8 @@ namespace DreamLocCommandletLocal
 		TArray<FString> Cultures = Options.References;
 		Cultures.AddUnique(InCulture);
 		const FDreamLocExchangeBatch Batch = DreamLocExchange::Collect(DreamLocSync::ReadFiles(DLocDirectory, Cultures), Options, Settings.SourceCulture, Messages);
-		const FString Default = FString::Printf(TEXT("Saved/DLoc/%s-batch.%s"), *InCulture, DreamLocExchange::ExtensionOf(Format.GetValue()));
+		// By default beside the owner's sources (a plugin's Saved/DLoc); a path given is relative to the project.
+		const FString Default = InOwner.Directory / FString::Printf(TEXT("Saved/DLoc/%s-batch.%s"), *InCulture, DreamLocExchange::ExtensionOf(Format.GetValue()));
 		FString Out = InOut.IsEmpty() ? Default : InOut;
 		Out = FPaths::ConvertRelativePathToFull(FPaths::IsRelative(Out) ? ProjectDirectory / Out : Out);
 		IFileManager::Get().MakeDirectory(*FPaths::GetPath(Out), /*Tree*/ true);
@@ -544,9 +550,9 @@ namespace DreamLocCommandletLocal
 		return CountErrors(Messages) > 0 ? 1 : 0;
 	}
 
-	int32 RunImportFile(const FString& InPath, const FString& InCulture, const FString& InState, bool bInForce, bool bInDryRun)
+	int32 RunImportFile(const FOwner& InOwner, const FString& InPath, const FString& InCulture, const FString& InState, bool bInForce, bool bInDryRun)
 	{
-		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
+		const FString& DLocDirectory = InOwner.DLocDirectory;
 		const FString Path = FPaths::ConvertRelativePathToFull(FPaths::IsRelative(InPath) ? FPaths::ProjectDir() / InPath : InPath);
 		const TOptional<EDreamLocExchangeFormat> Format = DreamLocExchange::FormatOfPath(Path);
 		FDreamLocExchangeBatch Batch;
@@ -578,10 +584,10 @@ namespace DreamLocCommandletLocal
 		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
 	}
 
-	int32 RunFreeze()
+	int32 RunFreeze(const FOwner& InOwner)
 	{
-		const FString DLocDirectory = FDreamLocTextSource::GetProjectDirectory();
-		const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+		const FString& DLocDirectory = InOwner.DLocDirectory;
+		const FDreamLocSettings& Settings = InOwner.Settings;
 		int32 Keys = 0;
 		const bool bWritten = DreamLocPublish::Freeze(DLocDirectory, DreamLocSync::ReadFiles(DLocDirectory, Settings.TargetCultures), Keys);
 		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc freeze: %d key(s) recorded in %s, %d error(s), 0 warning(s)"), Keys,
@@ -589,21 +595,25 @@ namespace DreamLocCommandletLocal
 		return bWritten ? 0 : 1;
 	}
 
-	int32 RunCheck(const FString& InFileArgument, const FString& InRootArgument, bool bInWithSync)
+	int32 RunCheck(const FString& InFileArgument, const FString& InRootArgument, bool bInWithSync, const FOwner& InOwner)
 	{
 		FDreamLocCheckOptions Options;
-		if (InRootArgument.IsEmpty())
-		{
-			for (const FDreamLocLayer& Layer : FDreamLocTextSource::FindLayers())
-			{
-				Options.Roots.Add(FDreamLocCheckRoot{ Layer.Directory, Layer.Index });
-			}
-		}
-		else
+		if (!InRootArgument.IsEmpty())
 		{
 			for (const FString& Root : GetRoots(InRootArgument))
 			{
 				Options.Roots.Add(FDreamLocCheckRoot{ Root, 1 });
+			}
+		}
+		else if (!InOwner.PluginName.IsEmpty())
+		{
+			Options.Roots.Add(FDreamLocCheckRoot{ InOwner.DLocDirectory, 0 });
+		}
+		else
+		{
+			for (const FDreamLocLayer& Layer : FDreamLocTextSource::FindLayers())
+			{
+				Options.Roots.Add(FDreamLocCheckRoot{ Layer.Directory, Layer.Index });
 			}
 		}
 		if (!InFileArgument.IsEmpty())
@@ -617,7 +627,8 @@ namespace DreamLocCommandletLocal
 		if (bInWithSync && InFileArgument.IsEmpty() && InRootArgument.IsEmpty())
 		{
 			DreamLocSync::FDirectoryOptions SyncOptions;
-			SyncOptions.OwnerDirectory = FPaths::ProjectDir();
+			SyncOptions.OwnerDirectory = InOwner.Directory;
+			SyncOptions.DLocDirectory = InOwner.DLocDirectory;
 			SyncOptions.bDryRun = true;
 			const FDreamLocSyncOutput Sync = DreamLocSync::SyncDirectory(SyncOptions);
 			for (const FDreamLocReportLine& Line : Sync.Messages)
@@ -630,7 +641,7 @@ namespace DreamLocCommandletLocal
 			const int32 Changes = Sync.NumWrites() + Sync.NumDeletes();
 			if (!Sync.bBlocked && Changes > 0)
 			{
-				Lines.Add(FDreamLocReportLine{ FDreamLocTextSource::GetProjectDirectory(), FDreamLocDiagnostic(EDreamLocSeverity::Warning,
+				Lines.Add(FDreamLocReportLine{ InOwner.DLocDirectory, FDreamLocDiagnostic(EDreamLocSeverity::Warning,
 					DreamLocCode::NotSynced, 0, 0, FString::Printf(TEXT("%d file(s) are not up to date with the sources; dloc sync -DryRun lists them"), Changes)) });
 			}
 		}
@@ -675,18 +686,20 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 	};
 
 	const FString RootArgument = GetValue(TEXT("Root"));
+	// Whose files every command works on: the project's, or with -Plugin=<name> the plugin's own DLoc/ and dloc.ini.
+	const FString PluginName = GetValue(TEXT("Plugin"));
+	FOwner Owner;
+	if (!ResolveOwner(PluginName, Owner))
+	{
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc plugin: nothing done, 1 error(s)"));
+		return 1;
+	}
 	if (HasSwitch(TEXT("Show")))
 	{
-		return RunShow(GetValue(TEXT("Culture")), RootArgument);
+		return RunShow(GetValue(TEXT("Culture")), RootArgument, Owner);
 	}
 	if (HasSwitch(TEXT("Sync")) || HasSwitch(TEXT("Gather")))
 	{
-		FOwner Owner;
-		if (!ResolveOwner(GetValue(TEXT("Plugin")), Owner))
-		{
-			UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc sync: nothing done, 1 error(s)"));
-			return 1;
-		}
 		if (HasSwitch(TEXT("Gather")) && RunGather(Owner) != 0)
 		{
 			return 1;
@@ -695,34 +708,23 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 	}
 	if (HasSwitch(TEXT("Bake")))
 	{
-		const FString PluginName = GetValue(TEXT("Plugin"));
-		if (PluginName.IsEmpty())
-		{
-			return RunBake(HasSwitch(TEXT("DryRun")));
-		}
-		FOwner Owner;
-		if (!ResolveOwner(PluginName, Owner))
-		{
-			UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc bake: nothing done, 1 error(s)"));
-			return 1;
-		}
-		return RunBakePlugin(Owner, HasSwitch(TEXT("DryRun")));
+		return PluginName.IsEmpty() ? RunBake(HasSwitch(TEXT("DryRun"))) : RunBakePlugin(Owner, HasSwitch(TEXT("DryRun")));
 	}
 	if (HasSwitch(TEXT("Prune")))
 	{
-		return RunPrune(HasSwitch(TEXT("DryRun")));
+		return RunPrune(Owner, HasSwitch(TEXT("DryRun")));
 	}
 	if (HasSwitch(TEXT("Freeze")))
 	{
-		return RunFreeze();
+		return RunFreeze(Owner);
 	}
 	if (HasSwitch(TEXT("Export")))
 	{
-		return RunExport(GetValue(TEXT("Culture")), GetValue(TEXT("Only")), GetValue(TEXT("Format")), GetValue(TEXT("Out")), GetValue(TEXT("Files")), GetValue(TEXT("Reference")));
+		return RunExport(Owner, GetValue(TEXT("Culture")), GetValue(TEXT("Only")), GetValue(TEXT("Format")), GetValue(TEXT("Out")), GetValue(TEXT("Files")), GetValue(TEXT("Reference")));
 	}
 	if (HasSwitch(TEXT("Import")))
 	{
-		return RunImportFile(GetValue(TEXT("In")), GetValue(TEXT("Culture")), GetValue(TEXT("State")), HasSwitch(TEXT("Force")), HasSwitch(TEXT("DryRun")));
+		return RunImportFile(Owner, GetValue(TEXT("In")), GetValue(TEXT("Culture")), GetValue(TEXT("State")), HasSwitch(TEXT("Force")), HasSwitch(TEXT("DryRun")));
 	}
 	if (HasSwitch(TEXT("Migrate")))
 	{
@@ -732,11 +734,13 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 		Request.ToNamespace = GetValue(TEXT("ToNamespace"));
 		Request.ToKey = GetValue(TEXT("To"));
 		Request.bForce = HasSwitch(TEXT("Force"));
-		return RunMigrate(Request);
+		return RunMigrate(Request, Owner);
 	}
 	if (HasSwitch(TEXT("ImportEngine")))
 	{
 		DreamLocEngine::FImportOptions Options;
+		Options.ProjectDirectory = Owner.Directory;
+		Options.DLocDirectory = Owner.DLocDirectory;
 		const FString Target = GetValue(TEXT("Target"));
 		Options.Target = Target.IsEmpty() ? TEXT("Game") : Target;
 		Options.NativeCulture = GetValue(TEXT("NativeCulture"));
@@ -748,10 +752,10 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 
 	if (HasSwitch(TEXT("Format")))
 	{
-		const TArray<FString> Roots = GetRoots(RootArgument);
+		const TArray<FString> Roots = RootArgument.IsEmpty() && !PluginName.IsEmpty() ? TArray<FString>{ Owner.DLocDirectory } : GetRoots(RootArgument);
 		TArray<FSourceFile> Files;
 		CollectFiles(GetValue(TEXT("File")), Roots, Files);
 		return RunFormat(Files, HasSwitch(TEXT("Write")), HasSwitch(TEXT("Verify")));
 	}
-	return RunCheck(GetValue(TEXT("File")), RootArgument, HasSwitch(TEXT("WithSync")));
+	return RunCheck(GetValue(TEXT("File")), RootArgument, HasSwitch(TEXT("WithSync")), Owner);
 }

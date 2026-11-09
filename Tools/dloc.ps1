@@ -40,7 +40,7 @@
 #                                     translator's tool or a spreadsheet; -Files limits it to some .dloc paths
 #   dloc.ps1 import -In F [-Culture C] [-State machine] [-Force] [-DryRun]
 #                                     translations back in: a reviewed one (state done) is kept unless -Force
-#   -Plugin P                         gather, sync and bake a plugin's own Source/Content into its own DLoc/ folder,
+#   -Plugin P                         any command but make and test on a plugin's own DLoc/ folder and Source/Content,
 #                                     with the plugin's DLoc/dloc.ini when it has one
 #
 # Every command but make and test runs `UnrealEditor-Cmd <project> -run=DreamLoc` on -Project, else the project above -File,

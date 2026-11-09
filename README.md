@@ -153,8 +153,9 @@ MetaData=true
 LoadingPolicy=Editor
 ```
 
-`dloc gather -Plugin <name>` and `dloc sync -Plugin <name>` fill `<Plugin>/DLoc/<culture>/`; the translation window's
-first list picks the plugin (a plugin with a `DLoc/dloc.ini`), and its AI pre-translate writes there. Then
+`dloc gather -Plugin <name>` and `dloc sync -Plugin <name>` fill `<Plugin>/DLoc/<culture>/` (every command takes
+`-Plugin`: export, import, check, fmt...); the translation window's first list picks the plugin (a plugin with a
+`DLoc/dloc.ini`), and its AI pre-translate writes there. Then
 `dloc bake -Plugin <name>` writes three targets into `<Plugin>/Content/Localization/`, split as the engine splits its
 own editor's: `<Plugin>` (every text but the two below, `LoadingPolicy` of `dloc.ini`: `Editor`, or `Always` for
 texts a packaged game shows too), `<Plugin>PropertyNames` (display names, loaded only while *Use localized property
