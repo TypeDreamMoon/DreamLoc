@@ -33,6 +33,11 @@
 #   dloc.ps1 bake -Plugin P [-DryRun] a plugin's own translations into its own localization targets
 #                                     (<plugin>/Content/Localization/P, PPropertyNames, PToolTips) and its .uplugin's
 #                                     LocalizationTargets: the engine shows them with the plugin, DreamLoc or not
+#   dloc.ps1 prefill [-Culture C] [-Target T,T] [-State draft|machine|done|none] [-DryRun]
+#                                     the engine's own translations (Engine/Content/Localization: PropertyNames,
+#                                     ToolTips, Category, Editor, Engine by default) into the entries with none whose
+#                                     source text the engine has, the most frequent one, marked with a comment
+#                                     (`// from the engine's <culture>`) and -State (default draft); -DryRun counts them
 #   dloc.ps1 prune [-DryRun]          delete the removed blocks, and the files left empty
 #   dloc.ps1 freeze                   record the keys as shipped (DLoc/dloc.frozen): a sync that loses one fails
 #   dloc.ps1 export -Culture C [-Only untranslated,stale] [-Format json|xliff|po|csv] [-Out F] [-Files P] [-Reference C]
@@ -62,12 +67,13 @@
 #   test: 0 green, 1 red (a test failed or an ensure fired), 2 not judged (the build failed, the editor crashed or
 #         timed out, or no test ran). Results land in <host>/Saved/DreamLocTests/<time>/: the engine's index.json,
 #         the run log and summary.md.
-#   check, fmt, show, gather, sync, migrate, import-engine: 0 no errors, 1 errors (fmt -Verify: a file not
+#   check, fmt, show, gather, sync, migrate, import-engine, bake, prefill, prune, freeze, export, import: 0 no errors,
+#         1 errors (fmt -Verify: a file not
 #         canonical), 2 the commandlet did not finish.
 
 [CmdletBinding()]
 param(
-    [Parameter(Position = 0)][ValidateSet('make', 'test', 'check', 'fmt', 'show', 'gather', 'sync', 'migrate', 'import-engine', 'bake', 'prune', 'freeze', 'export', 'import')][string]$Command = 'test',
+    [Parameter(Position = 0)][ValidateSet('make', 'test', 'check', 'fmt', 'show', 'gather', 'sync', 'migrate', 'import-engine', 'bake', 'prefill', 'prune', 'freeze', 'export', 'import')][string]$Command = 'test',
     [string]$Filter,
     [switch]$NoBuild,
     [string]$Project,
@@ -323,6 +329,7 @@ function Invoke-Commandlet {
         'migrate' { $arguments += '-Migrate' }
         'import-engine' { $arguments += '-ImportEngine' }
         'bake' { $arguments += '-Bake' }
+        'prefill' { $arguments += '-Prefill' }
         'prune' { $arguments += '-Prune' }
         'freeze' { $arguments += '-Freeze' }
         'export' { $arguments += '-Export' }

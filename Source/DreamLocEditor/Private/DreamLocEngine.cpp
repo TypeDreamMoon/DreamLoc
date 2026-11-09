@@ -799,3 +799,220 @@ FDreamLocSyncOutput DreamLocEngine::ImportTarget(const FImportOptions& InOptions
 	}
 	return Applied;
 }
+
+TArray<FString> DreamLocEngine::GetDefaultPrefillTargets()
+{
+	return { TEXT("PropertyNames"), TEXT("ToolTips"), TEXT("Category"), TEXT("Editor"), TEXT("Engine") };
+}
+
+DreamLocEngine::FEngineTranslations DreamLocEngine::ReadEngineTranslations(const FString& InLocalizationDirectory, const TArray<FString>& InTargets,
+	const FString& InNativeCulture, const FString& InCulture, TArray<FDreamLocReportLine>& OutMessages)
+{
+	using namespace DreamLocEngineLocal;
+	const FString Directory = InLocalizationDirectory.IsEmpty() ? FullDirectory(FPaths::EngineContentDir() / TEXT("Localization")) : FullDirectory(InLocalizationDirectory);
+
+	// Per source (and per namespace and source): each translation, how many entries have it, and when it was first read.
+	struct FCount
+	{
+		int32 Count = 0;
+		int32 First = 0;
+	};
+	TMap<FString, TMap<FString, FCount>> Counts;
+	TMap<FString, TMap<FString, FCount>> NamespaceCounts;
+	int32 Order = 0;
+	FEngineTranslations Out;
+	for (const FString& Target : InTargets)
+	{
+		const FString NativePath = Directory / Target / InNativeCulture / (Target + TEXT(".locres"));
+		const FString CulturePath = Directory / Target / InCulture / (Target + TEXT(".locres"));
+		FTextLocalizationResource Native;
+		FTextLocalizationResource Translated;
+		if (!IFileManager::Get().FileExists(*NativePath) || !IFileManager::Get().FileExists(*CulturePath)
+			|| !Native.LoadFromFile(NativePath, 0) || !Translated.LoadFromFile(CulturePath, 0))
+		{
+			AddMessage(OutMessages, CulturePath, EDreamLocSeverity::Warning, DreamLocCode::ImportUnreadable, FString::Printf(
+				TEXT("the engine's %s target has no %s and %s files to read here; left out"), *Target, *InNativeCulture, *InCulture));
+			continue;
+		}
+		for (const TPair<FTextId, FTextLocalizationResource::FEntry>& Pair : Translated.Entries)
+		{
+			const FTextLocalizationResource::FEntry* Source = Native.Entries.Find(Pair.Key);
+			if (Source == nullptr || !Source->LocalizedString.IsValid() || !Pair.Value.LocalizedString.IsValid())
+			{
+				continue;
+			}
+			const FString& Text = *Source->LocalizedString;
+			const FString& Translation = *Pair.Value.LocalizedString;
+			// A translation made from another source text (the engine's own stale one) is no translation of this one.
+			if (Text.IsEmpty() || Translation.IsEmpty() || Pair.Value.SourceStringHash != FTextLocalizationResource::HashString(Text))
+			{
+				continue;
+			}
+			++Out.Pairs;
+			auto Add = [Order](TMap<FString, FCount>& InOutCounts, const FString& InTranslation)
+			{
+				FCount& Count = InOutCounts.FindOrAdd(InTranslation, FCount{ 0, Order });
+				++Count.Count;
+			};
+			Add(Counts.FindOrAdd(Text), Translation);
+			Add(NamespaceCounts.FindOrAdd(MakeIdKey(Pair.Key.GetNamespace().ToString(), Text)), Translation);
+			++Order;
+		}
+	}
+	auto Best = [](const TMap<FString, FCount>& InCounts)
+	{
+		const TPair<FString, FCount>* Found = nullptr;
+		for (const TPair<FString, FCount>& Each : InCounts)
+		{
+			if (Found == nullptr || Each.Value.Count > Found->Value.Count || (Each.Value.Count == Found->Value.Count && Each.Value.First < Found->Value.First))
+			{
+				Found = &Each;
+			}
+		}
+		return Found != nullptr ? Found->Key : FString();
+	};
+	for (const TPair<FString, TMap<FString, FCount>>& Pair : Counts)
+	{
+		Out.BySource.Add(Pair.Key, Best(Pair.Value));
+	}
+	for (const TPair<FString, TMap<FString, FCount>>& Pair : NamespaceCounts)
+	{
+		Out.ByNamespaceAndSource.Add(Pair.Key, Best(Pair.Value));
+	}
+	return Out;
+}
+
+FString DreamLocEngine::GetPrefillMarker(const FString& InCulture)
+{
+	return FString::Printf(TEXT("// from the engine's %s"), *InCulture);
+}
+
+FDreamLocSyncOutput DreamLocEngine::ApplyPrefill(const FEngineTranslations& InTranslations, const TMap<FString, FString>& InFiles, const FString& InCulture,
+	const FString& InState, const FString& InDLocName, int32* OutUntranslated)
+{
+	using namespace DreamLocEngineLocal;
+	FDreamLocSyncOutput Output;
+	TArray<FString> Paths;
+	InFiles.GetKeys(Paths);
+	Paths.Sort();
+	const FString Marker = GetPrefillMarker(InCulture);
+	for (const FString& Path : Paths)
+	{
+		if (FPaths::GetCleanFilename(Path).StartsWith(TEXT("_")))
+		{
+			continue;
+		}
+		FDreamLocDocument Document;
+		TArray<FDreamLocDiagnostic> Diagnostics;
+		if (!DreamLocFile::Parse(InFiles.FindChecked(Path), Document, Diagnostics))
+		{
+			for (const FDreamLocDiagnostic& Diagnostic : Diagnostics)
+			{
+				if (Diagnostic.IsError())
+				{
+					Output.Messages.Add(FDreamLocReportLine{ InDLocName / InCulture / Path, Diagnostic });
+				}
+			}
+			Output.bBlocked = true;
+			continue;
+		}
+		int32 Filled = 0;
+		FString Namespace;
+		for (FDreamLocItem& Item : Document.Items)
+		{
+			if (Item.Kind == EDreamLocItemKind::Namespace)
+			{
+				Namespace = Item.Namespace;
+				continue;
+			}
+			const FString* Source = Item.Kind == EDreamLocItemKind::Entry ? Item.Entry.Find(EDreamLocField::Src) : nullptr;
+			if (Source == nullptr || Item.Entry.IsTranslated())
+			{
+				continue;
+			}
+			if (OutUntranslated != nullptr)
+			{
+				++*OutUntranslated;
+			}
+			const FString* Translation = InTranslations.ByNamespaceAndSource.Find(MakeIdKey(Namespace, *Source));
+			if (Translation == nullptr)
+			{
+				Translation = InTranslations.BySource.Find(*Source);
+			}
+			if (Translation == nullptr || Translation->IsEmpty())
+			{
+				continue;
+			}
+			Item.Entry.Set(EDreamLocField::Text, *Translation);
+			Item.Entry.Fields[(int32)EDreamLocField::Text].Comments = { Marker };
+			if (InState.IsEmpty())
+			{
+				Item.Entry.Remove(EDreamLocField::State);
+			}
+			else
+			{
+				Item.Entry.Set(EDreamLocField::State, InState);
+			}
+			++Filled;
+		}
+		if (Filled > 0)
+		{
+			Output.Changes.FindOrAdd(InCulture).Add(Path, DreamLocFile::Write(Document));
+			Output.Added += Filled;
+		}
+	}
+	if (Output.bBlocked)
+	{
+		Output.Changes.Reset();
+		Output.Added = 0;
+	}
+	return Output;
+}
+
+FDreamLocSyncOutput DreamLocEngine::Prefill(const FPrefillOptions& InOptions)
+{
+	using namespace DreamLocEngineLocal;
+	FDreamLocSyncOutput Output;
+	const FString DLocDirectory = FullDirectory(InOptions.DLocDirectory);
+	const FDreamLocSettings Settings = FDreamLocSettings::LoadFromDirectory(DLocDirectory);
+	if (!Settings.SourceCulture.Equals(InOptions.NativeCulture, ESearchCase::IgnoreCase))
+	{
+		AddMessage(Output.Messages, DLocDirectory / FDreamLocSettings::FileName, EDreamLocSeverity::Error, DreamLocCode::SyncBlocked, FString::Printf(
+			TEXT("the source culture here is %s, the engine's texts are %s: their translations are of other texts"), *Settings.SourceCulture, *InOptions.NativeCulture));
+		Output.bBlocked = true;
+		return Output;
+	}
+	const TArray<FString> Targets = InOptions.Targets.Num() > 0 ? InOptions.Targets : GetDefaultPrefillTargets();
+	const TArray<FString> Cultures = InOptions.Cultures.Num() > 0 ? InOptions.Cultures : Settings.TargetCultures;
+	const TMap<FString, TMap<FString, FString>> Files = DreamLocSync::ReadFiles(DLocDirectory, Cultures);
+	for (const FString& Culture : Cultures)
+	{
+		const FEngineTranslations Translations = ReadEngineTranslations(InOptions.LocalizationDirectory, Targets, InOptions.NativeCulture, Culture, Output.Messages);
+		const TMap<FString, FString>* CultureFiles = Files.Find(Culture);
+		if (CultureFiles == nullptr)
+		{
+			continue;
+		}
+		int32 Untranslated = 0;
+		FDreamLocSyncOutput Filled = ApplyPrefill(Translations, *CultureFiles, Culture, InOptions.State, FPaths::GetCleanFilename(DLocDirectory), &Untranslated);
+		Output.Messages.Append(MoveTemp(Filled.Messages));
+		if (Filled.bBlocked)
+		{
+			Output.bBlocked = true;
+			continue;
+		}
+		AddMessage(Output.Messages, DLocDirectory / Culture, EDreamLocSeverity::Info, DreamLocCode::Prefilled, FString::Printf(
+			TEXT("%s: %d of %d untranslated entr(ies) %s from the engine's %d translation(s) of %d source text(s) (%s)"), *Culture, Filled.Added,
+			Untranslated, InOptions.bDryRun ? TEXT("to fill") : TEXT("filled"), Translations.Pairs, Translations.BySource.Num(), *FString::Join(Targets, TEXT(", "))));
+		Output.Added += Filled.Added;
+		for (TPair<FString, TMap<FString, TOptional<FString>>>& Changed : Filled.Changes)
+		{
+			Output.Changes.FindOrAdd(Changed.Key).Append(MoveTemp(Changed.Value));
+		}
+	}
+	if (!Output.bBlocked && !InOptions.bDryRun)
+	{
+		DreamLocSync::ApplyChanges(DLocDirectory, Output, Output.Messages);
+	}
+	return Output;
+}

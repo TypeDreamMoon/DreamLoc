@@ -489,6 +489,26 @@ namespace DreamLocCommandletLocal
 		return Result.bSucceeded && CountErrors(Result.Messages) == 0 ? 0 : 1;
 	}
 
+	int32 RunPrefill(const FOwner& InOwner, const FString& InCultures, const FString& InTargets, const FString& InState, bool bInDryRun)
+	{
+		DreamLocEngine::FPrefillOptions Options;
+		Options.DLocDirectory = InOwner.DLocDirectory;
+		Options.Cultures = SplitCultures(InCultures);
+		// A list by commas, or by blanks: PowerShell joins an array given to a string parameter with them.
+		InTargets.Replace(TEXT(" "), TEXT(",")).ParseIntoArray(Options.Targets, TEXT(","), /*InCullEmpty*/ true);
+		if (!InState.IsEmpty())
+		{
+			Options.State = InState.Equals(TEXT("none"), ESearchCase::IgnoreCase) ? FString() : InState;
+		}
+		Options.bDryRun = bInDryRun;
+		const FDreamLocSyncOutput Output = DreamLocEngine::Prefill(Options);
+		ReportLines(Output.Messages);
+		ReportChanges(Output, InOwner.DLocDirectory, bInDryRun);
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc prefill: %d entr(ies) %s, %d file(s) %s, %d error(s), %d warning(s)"), Output.Added,
+			bInDryRun ? TEXT("to fill") : TEXT("filled"), Output.NumWrites(), bInDryRun ? TEXT("to write") : TEXT("written"), Output.NumErrors(), Output.NumWarnings());
+		return Output.bBlocked || Output.NumErrors() > 0 ? 1 : 0;
+	}
+
 	int32 RunPrune(const FOwner& InOwner, bool bInDryRun)
 	{
 		const FString& DLocDirectory = InOwner.DLocDirectory;
@@ -713,6 +733,10 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 	if (HasSwitch(TEXT("Prune")))
 	{
 		return RunPrune(Owner, HasSwitch(TEXT("DryRun")));
+	}
+	if (HasSwitch(TEXT("Prefill")))
+	{
+		return RunPrefill(Owner, GetValue(TEXT("Culture")), GetValue(TEXT("Target")), GetValue(TEXT("State")), HasSwitch(TEXT("DryRun")));
 	}
 	if (HasSwitch(TEXT("Freeze")))
 	{

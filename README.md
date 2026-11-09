@@ -100,6 +100,7 @@ pwsh -File Tools/dloc.ps1 migrate -From Old.Text -To New.Text
 pwsh -File Tools/dloc.ps1 import-engine -Target Game
 pwsh -File Tools/dloc.ps1 bake                  # the translations into Content/Localization/DreamLoc for packaging
 pwsh -File Tools/dloc.ps1 bake -Plugin DreamGUI # a plugin's own translations into its own localization targets
+pwsh -File Tools/dloc.ps1 prefill -Plugin DreamGUI -DryRun  # how many entries the engine's own translations fill
 pwsh -File Tools/dloc.ps1 export -Culture en    # what has no translation yet, as JSON for an AI (or -Format xliff/po/csv)
 pwsh -File Tools/dloc.ps1 import -In Saved/DLoc/en-batch.json -State machine
 pwsh -File Tools/dloc.ps1 prune                 # delete the removed blocks
@@ -154,8 +155,12 @@ LoadingPolicy=Editor
 ```
 
 `dloc gather -Plugin <name>` and `dloc sync -Plugin <name>` fill `<Plugin>/DLoc/<culture>/` (every command takes
-`-Plugin`: export, import, check, fmt...); the translation window's first list picks the plugin (a plugin with a
-`DLoc/dloc.ini`), and its AI pre-translate writes there. Then
+`-Plugin`: export, import, check, fmt...). `dloc prefill -Plugin <name>` gives each entry without a translation what the
+engine's own editor says for the same English -- "Visibility", "Render Transform" -- from the engine's PropertyNames,
+ToolTips, Category, Editor and Engine targets: the most frequent translation, the one of the same namespace first, as
+a draft with a `// from the engine's <culture>` comment above it (DLOC3032; `-DryRun` counts them). The translation
+window's first list picks the plugin (a plugin with a `DLoc/dloc.ini`), and its AI pre-translate writes there, sending
+a text many entries share once. Then
 `dloc bake -Plugin <name>` writes three targets into `<Plugin>/Content/Localization/`, split as the engine splits its
 own editor's: `<Plugin>` (every text but the two below, `LoadingPolicy` of `dloc.ini`: `Editor`, or `Always` for
 texts a packaged game shows too), `<Plugin>PropertyNames` (display names, loaded only while *Use localized property

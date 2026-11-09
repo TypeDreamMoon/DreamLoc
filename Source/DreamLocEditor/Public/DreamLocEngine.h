@@ -119,4 +119,62 @@ namespace DreamLocEngine
 
 	/** ReadTarget, then ApplyImport on the .dloc files on disk, then writes them. */
 	DREAMLOCEDITOR_API FDreamLocSyncOutput ImportTarget(const FImportOptions& InOptions);
+
+	/** The engine's own localization targets `dloc prefill` reads by default: the editor's UI, its property names, tooltips, categories, and the engine's. */
+	DREAMLOCEDITOR_API TArray<FString> GetDefaultPrefillTargets();
+
+	/** What the engine's translations of one culture say a source text is, from its own targets. */
+	struct FEngineTranslations
+	{
+		/** Source -> the translation the most entries with it have (on a tie, the first target's, then the first read). */
+		TMap<FString, FString> BySource;
+		/** Namespace + U+001F + source -> the same, among the entries of that namespace: the meaning of the namespace first. */
+		TMap<FString, FString> ByNamespaceAndSource;
+		/** Translations read (an entry whose translation was made from another source is not one). */
+		int32 Pairs = 0;
+	};
+
+	/**
+	 * Joins each target's <native culture>/<target>.locres and <culture>/<target>.locres by namespace and key, under
+	 * InLocalizationDirectory/<target>/ (empty: the engine's Content/Localization): what the engine ships, the source text
+	 * to its translation. A target with no file for the culture is reported and skipped.
+	 */
+	DREAMLOCEDITOR_API FEngineTranslations ReadEngineTranslations(const FString& InLocalizationDirectory, const TArray<FString>& InTargets,
+		const FString& InNativeCulture, const FString& InCulture, TArray<FDreamLocReportLine>& OutMessages);
+
+	/** The comment a prefilled translation gets above its `text`, so a reviewer can tell it from the others (sync never touches comments). */
+	DREAMLOCEDITOR_API FString GetPrefillMarker(const FString& InCulture);
+
+	/**
+	 * Gives every entry of a culture's .dloc files (path -> text, as sync reads them) that has no translation the engine's
+	 * translation of its source text: the one of its namespace when there is one, else any. The translation is written
+	 * with InState (draft, machine, done; empty for none) and the marker comment. Translated, stale and removed entries,
+	 * and the `_` files (terms), are left alone. Output.Added counts the entries filled; OutUntranslated, those without a
+	 * translation it looked at.
+	 */
+	DREAMLOCEDITOR_API FDreamLocSyncOutput ApplyPrefill(const FEngineTranslations& InTranslations, const TMap<FString, FString>& InFiles, const FString& InCulture,
+		const FString& InState, const FString& InDLocName = TEXT("DLoc"), int32* OutUntranslated = nullptr);
+
+	struct FPrefillOptions
+	{
+		/** The DLoc folder filled: the project's or a plugin's. */
+		FString DLocDirectory;
+		/** Empty: GetDefaultPrefillTargets. */
+		TArray<FString> Targets;
+		/** Where the targets are; empty: the engine's Content/Localization. */
+		FString LocalizationDirectory;
+		/** The targets' source culture. */
+		FString NativeCulture = TEXT("en");
+		/** Empty: the dloc.ini TargetCultures. */
+		TArray<FString> Cultures;
+		FString State = TEXT("draft");
+		bool bDryRun = false;
+	};
+
+	/**
+	 * `dloc prefill`: the engine's own translations into the untranslated entries whose source text the engine has, for a
+	 * plugin whose UI says what the editor says ("Visibility", "Render Transform"). Writes nothing with bDryRun; the
+	 * output says how many entries it fills either way. Only for a DLoc folder whose source culture is the targets'.
+	 */
+	DREAMLOCEDITOR_API FDreamLocSyncOutput Prefill(const FPrefillOptions& InOptions);
 }
