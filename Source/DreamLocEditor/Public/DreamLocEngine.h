@@ -71,7 +71,7 @@ namespace DreamLocEngine
 	 * The engine's gather manifest as extraction manifests, one per file, each text once per file it was found in.
 	 * C++ texts are in line order and carry no line in `at` (a line number would change with every edit above it); an
 	 * asset's texts carry the object path inside the package; a meta-data text is in the header its type is declared
-	 * in, with the field in `at` (`DreamCanvas:SortOrder`) and what it is in `kind` (`ToolTip (IntProperty)`).
+	 * in, with the field in `at` (`DreamCanvas:SortOrder`) and what it is in `kind` (`tooltip`, `display name`, `category`).
 	 */
 	DREAMLOCEDITOR_API bool ReadGatherManifest(const FString& InManifestPath, const FString& InProjectDirectory, const FString& InNativeCulture,
 		TArray<FDreamLocExtractManifest>& OutManifests, FString& OutError);

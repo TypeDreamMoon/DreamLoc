@@ -98,7 +98,7 @@ namespace DreamLocEngineLocal
 	/**
 	 * A meta-data text's location -- `/Script/DreamGUI.DreamCanvas:SortOrder [IntProperty ToolTip meta-data]`, an enum
 	 * value's `/Script/DreamGUI.EDreamFit:Fill [EnumEntry DisplayName meta-data]` -- as the header the type is declared
-	 * in, the field (`DreamCanvas:SortOrder`) and what the text is (`ToolTip (IntProperty)`).
+	 * in, the field (`DreamCanvas:SortOrder`) and what the text is (`tooltip`).
 	 */
 	bool SplitScript(const FString& InLocation, const FString& InProjectDirectory, FString& OutFile, FString& OutWhere, FString& OutKind)
 	{
@@ -113,9 +113,16 @@ namespace DreamLocEngineLocal
 			FString What = Path.Mid(Bracket + 1);
 			What.RemoveFromEnd(TEXT("]"));
 			What.RemoveFromEnd(TEXT(" meta-data"));
+			// What it is, not what type the field is: the translation flow sends a source once per kind, and "Visibility"
+			// is one display name for a bool property, an enum property and an enum value alike.
 			FString Field;
 			FString Key;
-			OutKind = What.Split(TEXT(" "), &Field, &Key) ? FString::Printf(TEXT("%s (%s)"), *Key, *Field) : What;
+			if (!What.Split(TEXT(" "), &Field, &Key))
+			{
+				Key = What;
+			}
+			OutKind = Key == TEXT("DisplayName") ? TEXT("display name") : Key == TEXT("ToolTip") ? TEXT("tooltip")
+				: Key == TEXT("ShortTooltip") ? TEXT("short tooltip") : Key == TEXT("Category") ? TEXT("category") : Key;
 			Path.LeftInline(Bracket);
 			Path.TrimEndInline();
 		}

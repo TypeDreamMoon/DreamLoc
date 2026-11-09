@@ -118,12 +118,12 @@ bool FDreamLocGatherMetaDataTest::RunTest(const FString& Parameters)
 	if (TestNotNull(TEXT("the tooltip's entry"), Tip))
 	{
 		TestEqual(TEXT("where it is: the field, without the module"), Tip->At, FString(TEXT("DreamLocMetaDataSample:Width")));
-		TestEqual(TEXT("what it is, for the translator"), Tip->Kind, FString(TEXT("ToolTip (FloatProperty)")));
+		TestEqual(TEXT("what it is, for the translator"), Tip->Kind, FString(TEXT("tooltip")));
 	}
 	const FDreamLocExtractEntry* Value = FindEntry(Manifest, TEXT("UObjectDisplayNames"), Enum->GetFullGroupName(false) + TEXT(".") + Enum->GetNameStringByIndex(0));
 	if (TestNotNull(TEXT("the enum value's entry"), Value))
 	{
-		TestEqual(TEXT("an enum value's kind"), Value->Kind, FString(TEXT("DisplayName (EnumEntry)")));
+		TestEqual(TEXT("an enum value's kind: a display name like any other, so one source is sent once"), Value->Kind, FString(TEXT("display name")));
 	}
 
 	// Without MetaData: the LOCTEXT alone.

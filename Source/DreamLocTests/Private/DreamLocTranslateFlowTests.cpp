@@ -97,6 +97,56 @@ bool FDreamLocTranslateBatchesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateSameNameTest, "DreamLoc.Translate.Flow.AFieldNameManyClassesShareIsSentOncePerKind",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateSameNameTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateFlowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("TranslateSameName")))
+	{
+		return false;
+	}
+	// A plugin's meta-data as `dloc gather` makes it: one display name in three classes' headers, and a tooltip of the same words.
+	S->Write(TEXT("dloc.ini"), Ini(TEXT("Profile=model\n")));
+	S->Write(TEXT("en/Source/A.h.dloc"), MakeDloc(TEXT("en"), TEXT("UObjectDisplayNames"), { { TEXT("Button:Visibility"), TEXT("Visibility") } }));
+	S->Write(TEXT("en/Source/B.h.dloc"), MakeDloc(TEXT("en"), TEXT("UObjectDisplayNames"), { { TEXT("Image:Visibility"), TEXT("Visibility") }, { TEXT("EFit.Visibility"), TEXT("Visibility") } }));
+	S->Write(TEXT("en/Source/C.h.dloc"), MakeDloc(TEXT("en"), TEXT("UObjectToolTips"), { { TEXT("Button:Visibility"), TEXT("Visibility") } }));
+	auto Manifest = [](const TCHAR* InSource, const TCHAR* InNamespace, TArray<TPair<FString, FString>> InKeysAndKinds)
+	{
+		FDreamLocExtractManifest Out;
+		Out.Provider = TEXT("Engine");
+		Out.Source = InSource;
+		for (const TPair<FString, FString>& Each : InKeysAndKinds)
+		{
+			FDreamLocExtractEntry Entry;
+			Entry.Key = Each.Key;
+			Entry.Source = TEXT("Visibility");
+			Entry.Kind = Each.Value;
+			Out.FindOrAddNamespace(InNamespace).Entries.Add(MoveTemp(Entry));
+		}
+		return Out;
+	};
+	FDreamLocTranslateRequest Request = S->MakeRequest();
+	Request.Profiles = { S->Fake->Profile(TEXT("OpenAI"), TEXT("model")) };
+	Request.Manifests = TArray<FDreamLocExtractManifest>{
+		Manifest(TEXT("Source/A.h"), TEXT("UObjectDisplayNames"), { { TEXT("Button:Visibility"), TEXT("display name") } }),
+		Manifest(TEXT("Source/B.h"), TEXT("UObjectDisplayNames"), { { TEXT("Image:Visibility"), TEXT("display name") }, { TEXT("EFit.Visibility"), TEXT("display name") } }),
+		Manifest(TEXT("Source/C.h"), TEXT("UObjectToolTips"), { { TEXT("Button:Visibility"), TEXT("tooltip") } }) };
+	const FDreamLocTranslateEstimate Estimate = DreamLocTranslateFlow::Estimate(Request);
+	TestEqual(TEXT("four entries, two to send: the display name once, the tooltip once"), FString::Printf(TEXT("%d entries, %d to send"), Estimate.Entries, Estimate.Distinct),
+		TEXT("4 entries, 2 to send"));
+	S->Run(Request);
+	ADD_LATENT_AUTOMATION_COMMAND(FAfterRun(this, S, [this](FScenario& InS)
+	{
+		TestEqual(TEXT("every entry translated"), InS.Result.Translated, 4);
+		TestEqual(TEXT("two texts sent"), InS.SentToModel().Num(), 2);
+		TestEqual(TEXT("the answer in every class's entry"), Field(InS.Entry(TEXT("en/Source/B.h.dloc"), TEXT("EFit.Visibility")), EDreamLocField::Text), TEXT("en: Visibility"));
+		TestEqual(TEXT("and the first's"), Field(InS.Entry(TEXT("en/Source/A.h.dloc"), TEXT("Button:Visibility")), EDreamLocField::Text), TEXT("en: Visibility"));
+	}));
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateRetriesTest, "DreamLoc.Translate.Flow.WaitsAfter429AndSendsAgainAnAnswerThatDoesNotRead",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 bool FDreamLocTranslateRetriesTest::RunTest(const FString& Parameters)
