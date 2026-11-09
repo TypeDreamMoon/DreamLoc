@@ -49,6 +49,16 @@ public:
 
 	/** Points the window at another DLoc folder (and owner), and reads everything again. */
 	void SetDirectories(const FString& InDLocDirectory, const FString& InOwnerDirectory);
+	/**
+	 * What the toolbar's first list offers: empty for the project's DLoc folder, then, by name, every enabled plugin
+	 * with a DLoc/dloc.ini of its own -- a plugin translating its own UI.
+	 */
+	static TArray<FString> FindOwners();
+	/** The project's DLoc folder (empty) or a plugin's, by name, the box's change kept as a draft first. False when there is no such plugin. */
+	bool SetOwner(const FString& InPluginName);
+	/** The plugin whose DLoc folder is shown; empty for the project's, or a folder SetDirectories was given. */
+	const FString& GetOwner() const { return OwnerName; }
+	const FString& GetDLocDirectory() const { return DLocDirectory; }
 	/** Reads the settings, the profiles and the files again, keeping the culture, the filter and the entry chosen. */
 	void Refresh();
 
@@ -186,6 +196,7 @@ private:
 
 	FString DLocDirectory;
 	FString OwnerDirectory;
+	FString OwnerName;
 	FDreamLocSettings Settings;
 	TArray<FDreamLocTranslateProfile> Profiles;
 	FDreamLocReviewModel Model;
@@ -203,6 +214,8 @@ private:
 	TSharedPtr<SHeaderRow> Header;
 	TSharedPtr<SDreamLocTranslateEditor> Editor;
 
+	TArray<TSharedPtr<FString>> OwnerChoices;
+	TSharedPtr<SComboBox<TSharedPtr<FString>>> OwnerCombo;
 	TArray<TSharedPtr<FString>> CultureChoices;
 	TArray<TSharedPtr<FString>> ReferenceChoices;
 	TArray<TSharedPtr<FString>> ProfileChoices;

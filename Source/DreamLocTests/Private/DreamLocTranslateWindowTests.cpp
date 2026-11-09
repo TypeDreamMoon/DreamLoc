@@ -11,11 +11,13 @@
 #include "Framework/Application/SlateUser.h"
 #include "Framework/Docking/TabManager.h"
 #include "HAL/IConsoleManager.h"
+#include "Interfaces/IPluginManager.h"
 #include "ISettingsCategory.h"
 #include "ISettingsContainer.h"
 #include "ISettingsModule.h"
 #include "ISettingsSection.h"
 #include "Layout/WidgetPath.h"
+#include "Misc/ScopeExit.h"
 #include "SDreamLocPretranslateDialog.h"
 #include "SDreamLocTranslateSettings.h"
 #include "SDreamLocTranslateWindow.h"
@@ -1322,6 +1324,50 @@ bool FDreamLocTranslateWindowFitTest::RunTest(const FString& Parameters)
 		TEXT("2240,140 1280 x 760"));
 	TestEqual(TEXT("a size a person chose"), Describe(DreamLocTranslateWindow::FitRect(FVector2D(1500.0, 900.0), false, FSlateRect(0.0f, 0.0f, 1920.0f, 1040.0f), 1.0f)),
 		TEXT("left as it is"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateOwnerTest, "DreamLoc.Translate.Window.APluginsOwnDLocFolderFromTheToolbar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateOwnerTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("TranslateOwner")))
+	{
+		return false;
+	}
+	ON_SCOPE_EXIT { S->End(); };
+	S->Write(TEXT("dloc.ini"), TEXT("[DreamLoc]\nSourceCulture=zh-Hans\nTargetCultures=en\n"));
+	S->Write(TEXT("en/UI/Menu.dloc"), MakeDloc(TEXT("en"), TEXT("Menu"), { { TEXT("Start"), TEXT("开始游戏") } }));
+	const TSharedRef<SDreamLocTranslateWindow> Window = SNew(SDreamLocTranslateWindow).DLocDirectory(S->DLoc).OwnerDirectory(S->Root);
+
+	const TArray<FString> Owners = SDreamLocTranslateWindow::FindOwners();
+	TestTrue(TEXT("the project's folder first"), Owners.Num() > 0 && Owners[0].IsEmpty());
+	TestFalse(TEXT("a plugin without a DLoc/dloc.ini is not offered"), Owners.Contains(TEXT("DreamLoc")));
+	const TSharedPtr<SWidget> Combo = FindTagged(Window, TEXT("DreamLocTranslate.Owner"));
+	TestTrue(TEXT("the toolbar's list"), Combo.IsValid());
+	TestEqual(TEXT("it says whose"), TextUnder(Combo), FString(TEXT("Project")));
+
+	TestFalse(TEXT("no such plugin"), Window->SetOwner(TEXT("NoSuchPlugin")));
+	TestEqual(TEXT("the folder as it was"), Window->GetDLocDirectory(), S->DLoc);
+	TestEqual(TEXT("its entries"), Window->GetModel().GetEntries().Num(), 1);
+
+	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("DreamLoc"));
+	if (TestTrue(TEXT("DreamLoc is a plugin here"), Plugin.IsValid()))
+	{
+		const FString Base = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir());
+		TestTrue(TEXT("a plugin by name"), Window->SetOwner(TEXT("DreamLoc")));
+		TestEqual(TEXT("whose it is"), Window->GetOwner(), FString(TEXT("DreamLoc")));
+		TestEqual(TEXT("its DLoc folder"), Window->GetDLocDirectory(), Base / TEXT("DLoc"));
+		TestEqual(TEXT("the label"), TextUnder(Combo), FString(TEXT("Plugin: DreamLoc")));
+		const FDreamLocTranslateRequest Request = Window->MakeBaseRequest();
+		TestEqual(TEXT("a pre-translation writes into the plugin's folder"), Request.DLocDirectory, Base / TEXT("DLoc"));
+		TestEqual(TEXT("with the plugin's sources"), Request.OwnerDirectory, Base);
+	}
+	TestTrue(TEXT("back to the project's"), Window->SetOwner(FString()));
+	TestEqual(TEXT("nobody's but the project's"), Window->GetOwner(), FString());
+	TestEqual(TEXT("the project's DLoc folder"), Window->GetDLocDirectory(), FDreamLocTextSource::GetProjectDirectory());
 	return true;
 }
 

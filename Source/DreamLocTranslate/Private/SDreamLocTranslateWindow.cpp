@@ -15,8 +15,10 @@
 #include "Editor.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "HAL/PlatformProcess.h"
+#include "Interfaces/IPluginManager.h"
 #include "HAL/PlatformTime.h"
 #include "IDirectoryWatcher.h"
 #include "Misc/Paths.h"
@@ -291,6 +293,15 @@ TSharedRef<SWidget> SDreamLocTranslateWindow::MakeToolbar()
 	const TSharedRef<SWrapBox> Row = SNew(SWrapBox).UseAllottedSize(true);
 	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
 	[
+		Choices(OwnerCombo, &OwnerChoices, [](const FString& InName)
+			{
+				return InName.IsEmpty() ? LOCTEXT("OwnerProject", "Project") : FText::Format(LOCTEXT("OwnerPlugin", "Plugin: {0}"), FText::FromString(InName));
+			},
+			[this](const FString& InName) { SetOwner(InName); }, [this]() { return OwnerName; }, TEXT("DreamLocTranslate.Owner"),
+			LOCTEXT("OwnerTip", "Whose translations: the project's, or a plugin's own (a plugin with a DLoc/dloc.ini)"))
+	];
+	Row->AddSlot().Padding(0.0f, 0.0f, 6.0f, 4.0f).VAlign(VAlign_Center)
+	[
 		Choices(CultureCombo, &CultureChoices, [](const FString& InName) { return InName.IsEmpty() ? LOCTEXT("NoCulture", "(no culture)") : FText::FromString(InName); },
 			[this](const FString& InName) { SetCulture(InName); }, [this]() { return Culture; }, TEXT("DreamLocTranslate.Culture"),
 			LOCTEXT("CultureTip", "The culture to review"))
@@ -524,10 +535,47 @@ void SDreamLocTranslateWindow::SetDirectories(const FString& InDLocDirectory, co
 	UnwatchDirectory();
 	DLocDirectory = InDLocDirectory;
 	OwnerDirectory = InOwnerDirectory;
+	OwnerName.Reset();
 	Culture.Reset();
 	Current.Reset();
 	Refresh();
 	WatchDirectory();
+}
+
+TArray<FString> SDreamLocTranslateWindow::FindOwners()
+{
+	TArray<FString> Plugins;
+	for (const TSharedRef<IPlugin>& Plugin : IPluginManager::Get().GetEnabledPlugins())
+	{
+		if (IFileManager::Get().FileExists(*(Plugin->GetBaseDir() / TEXT("DLoc") / FDreamLocSettings::FileName)))
+		{
+			Plugins.Add(Plugin->GetName());
+		}
+	}
+	Plugins.Sort();
+	TArray<FString> Owners = { FString() };
+	Owners.Append(Plugins);
+	return Owners;
+}
+
+bool SDreamLocTranslateWindow::SetOwner(const FString& InPluginName)
+{
+	FString Owner = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	FString DLoc = FDreamLocTextSource::GetProjectDirectory();
+	if (!InPluginName.IsEmpty())
+	{
+		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(InPluginName);
+		if (!Plugin.IsValid())
+		{
+			return false;
+		}
+		Owner = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir());
+		DLoc = Owner / TEXT("DLoc");
+	}
+	KeepEdit();
+	SetDirectories(DLoc, Owner);
+	OwnerName = InPluginName;
+	return true;
 }
 
 void SDreamLocTranslateWindow::Refresh()
@@ -576,6 +624,7 @@ void SDreamLocTranslateWindow::Refresh()
 	{
 		ProfileNames.Add(Each.Name);
 	}
+	SetChoices(OwnerChoices, FindOwners(), OwnerCombo);
 	SetChoices(CultureChoices, Settings.TargetCultures, CultureCombo);
 	SetChoices(ReferenceChoices, References, ReferenceCombo);
 	SetChoices(ProfileChoices, ProfileNames, ProfileCombo);
