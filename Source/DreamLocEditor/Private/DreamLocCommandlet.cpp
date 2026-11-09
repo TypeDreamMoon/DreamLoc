@@ -337,6 +337,8 @@ namespace DreamLocCommandletLocal
 		FString Directory;
 		FString DLocDirectory;
 		FDreamLocSettings Settings;
+		/** The plugin's name; empty for the project. */
+		FString PluginName;
 	};
 
 	/**
@@ -361,6 +363,7 @@ namespace DreamLocCommandletLocal
 		}
 		OutOwner.Directory = FPaths::ConvertRelativePathToFull(Plugin->GetBaseDir());
 		OutOwner.DLocDirectory = OutOwner.Directory / TEXT("DLoc");
+		OutOwner.PluginName = Plugin->GetName();
 		if (IFileManager::Get().FileExists(*(OutOwner.DLocDirectory / FDreamLocSettings::FileName)))
 		{
 			OutOwner.Settings = FDreamLocSettings::LoadFromDirectory(OutOwner.DLocDirectory);
@@ -374,6 +377,7 @@ namespace DreamLocCommandletLocal
 			OutOwner.Settings.GatherExcludePaths = Defaults.GatherExcludePaths;
 			OutOwner.Settings.bGatherEditorOnlyData = Defaults.bGatherEditorOnlyData;
 			OutOwner.Settings.bGatherMetaData = Defaults.bGatherMetaData;
+			OutOwner.Settings.PublishLoadingPolicy = Defaults.PublishLoadingPolicy;
 		}
 		return true;
 	}
@@ -458,6 +462,26 @@ namespace DreamLocCommandletLocal
 		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc bake: %d culture(s), %d translation(s), %d source text(s), %d file(s) %s, %d error(s), %d warning(s)"),
 			Result.Translations.Num(), Translations, Result.Sources, Result.Files.Num(), bInDryRun ? TEXT("to write") : TEXT("written"),
 			CountErrors(Result.Messages), CountWarnings(Result.Messages));
+		return Result.bSucceeded && CountErrors(Result.Messages) == 0 ? 0 : 1;
+	}
+
+	int32 RunBakePlugin(const FOwner& InOwner, bool bInDryRun)
+	{
+		DreamLocPublish::FPluginBakeOptions Options;
+		Options.PluginDirectory = InOwner.Directory;
+		Options.PluginName = InOwner.PluginName;
+		Options.Settings = InOwner.Settings;
+		Options.bDryRun = bInDryRun;
+		const DreamLocPublish::FPluginBakeResult Result = DreamLocPublish::BakePlugin(Options);
+		ReportLines(Result.Messages);
+		int32 Translations = 0;
+		for (const TPair<FString, int32>& Pair : Result.Translations)
+		{
+			Translations += Pair.Value;
+		}
+		UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc bake %s: %d target(s), %d culture(s), %d translation(s), %d source text(s), %d file(s) %s, %d error(s), %d warning(s)"),
+			*InOwner.PluginName, Result.Targets.Num(), Result.Translations.Num(), Translations, Result.Sources, Result.Files.Num(),
+			bInDryRun ? TEXT("to write") : TEXT("written"), CountErrors(Result.Messages), CountWarnings(Result.Messages));
 		return Result.bSucceeded && CountErrors(Result.Messages) == 0 ? 0 : 1;
 	}
 
@@ -671,7 +695,18 @@ int32 UDreamLocCommandlet::Main(const FString& Params)
 	}
 	if (HasSwitch(TEXT("Bake")))
 	{
-		return RunBake(HasSwitch(TEXT("DryRun")));
+		const FString PluginName = GetValue(TEXT("Plugin"));
+		if (PluginName.IsEmpty())
+		{
+			return RunBake(HasSwitch(TEXT("DryRun")));
+		}
+		FOwner Owner;
+		if (!ResolveOwner(PluginName, Owner))
+		{
+			UE_LOG(LogDreamLocCommandlet, Display, TEXT("DreamLoc bake: nothing done, 1 error(s)"));
+			return 1;
+		}
+		return RunBakePlugin(Owner, HasSwitch(TEXT("DryRun")));
 	}
 	if (HasSwitch(TEXT("Prune")))
 	{

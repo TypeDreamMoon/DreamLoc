@@ -30,6 +30,9 @@
 #                                     take the translations of an engine localization target into the .dloc files
 #   dloc.ps1 bake [-DryRun]           the project's and plugins' translations into Content/Localization/DreamLoc for a
 #                                     packaged game; warns when the packaging settings would leave them out
+#   dloc.ps1 bake -Plugin P [-DryRun] a plugin's own translations into its own localization targets
+#                                     (<plugin>/Content/Localization/P, PPropertyNames, PToolTips) and its .uplugin's
+#                                     LocalizationTargets: the engine shows them with the plugin, DreamLoc or not
 #   dloc.ps1 prune [-DryRun]          delete the removed blocks, and the files left empty
 #   dloc.ps1 freeze                   record the keys as shipped (DLoc/dloc.frozen): a sync that loses one fails
 #   dloc.ps1 export -Culture C [-Only untranslated,stale] [-Format json|xliff|po|csv] [-Out F] [-Files P] [-Reference C]
@@ -37,7 +40,8 @@
 #                                     translator's tool or a spreadsheet; -Files limits it to some .dloc paths
 #   dloc.ps1 import -In F [-Culture C] [-State machine] [-Force] [-DryRun]
 #                                     translations back in: a reviewed one (state done) is kept unless -Force
-#   -Plugin P                         gather and sync a plugin's own Source/Content into its own DLoc/ folder
+#   -Plugin P                         gather, sync and bake a plugin's own Source/Content into its own DLoc/ folder,
+#                                     with the plugin's DLoc/dloc.ini when it has one
 #
 # Every command but make and test runs `UnrealEditor-Cmd <project> -run=DreamLoc` on -Project, else the project above -File,
 # else the project above the current directory, else the test host, and keep the lines that matter: diagnostics

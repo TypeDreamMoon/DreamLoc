@@ -99,6 +99,7 @@ pwsh -File Tools/dloc.ps1 sync [-Gather]        # bring the .dloc files up to da
 pwsh -File Tools/dloc.ps1 migrate -From Old.Text -To New.Text
 pwsh -File Tools/dloc.ps1 import-engine -Target Game
 pwsh -File Tools/dloc.ps1 bake                  # the translations into Content/Localization/DreamLoc for packaging
+pwsh -File Tools/dloc.ps1 bake -Plugin DreamGUI # a plugin's own translations into its own localization targets
 pwsh -File Tools/dloc.ps1 export -Culture en    # what has no translation yet, as JSON for an AI (or -Format xliff/po/csv)
 pwsh -File Tools/dloc.ps1 import -In Saved/DLoc/en-batch.json -State machine
 pwsh -File Tools/dloc.ps1 prune                 # delete the removed blocks
@@ -132,6 +133,33 @@ Once a version is out, `dloc freeze` records its keys in `DLoc/dloc.frozen`: a l
 from the sources, and not renamed, writes nothing and says so (DLOC3022). `dloc prune` deletes the removed blocks
 whose translations nobody needs any more. A plugin keeps its own texts with `dloc gather -Plugin <name>` and
 `dloc sync -Plugin <name>`, into its own `DLoc/` folder (with its own `dloc.ini`, or the project's cultures).
+
+### A plugin's own UI
+
+A plugin translates its own editor UI -- menus, panels, the Details panel's names and tooltips -- in its own `DLoc/`,
+and ships it as localization targets of its own, which the engine loads with the plugin whether the project has
+DreamLoc or not:
+
+```
+; <Plugin>/DLoc/dloc.ini
+[DreamLoc]
+SourceCulture=en
+TargetCultures=zh-Hans
+[Gather]
+ExcludePaths=Content/Localization/*
+EditorOnlyData=true
+MetaData=true
+[Publish]
+LoadingPolicy=Editor
+```
+
+`dloc gather -Plugin <name>` and `dloc sync -Plugin <name>` fill `<Plugin>/DLoc/<culture>/`. Then
+`dloc bake -Plugin <name>` writes three targets into `<Plugin>/Content/Localization/`, split as the engine splits its
+own editor's: `<Plugin>` (every text but the two below, `LoadingPolicy` of `dloc.ini`: `Editor`, or `Always` for
+texts a packaged game shows too), `<Plugin>PropertyNames` (display names, loaded only while *Use localized property
+names* is on) and `<Plugin>ToolTips`. It lists them in the `.uplugin`'s `LocalizationTargets`, changing nothing else
+in it (DLOC3031), and leaves out a target with no text. Machine translations are baked like the rest. The editor
+reads a `.uplugin` when it starts: a new target shows after a restart.
 
 With DreamNarrative in the test host too (a worktree in `Plugins/DreamNarrative`, the plugin enabled in the
 `.uproject`, the `.dna` under `DNarrative/`), `DreamLocHost.Acceptance.DreamNarrative.*` takes a chapter through DLoc:

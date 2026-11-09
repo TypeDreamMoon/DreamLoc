@@ -134,6 +134,8 @@ namespace DreamLocCode
 	inline constexpr int32 Imported = 3029;
 	/** A translated key the source tool numbers by position (`stable: false`) has a new source: maybe every key after an inserted text shifted. */
 	inline constexpr int32 PositionalKeyChanged = 3030;
+	/** `dloc bake -Plugin`: what it set in the plugin's .uplugin LocalizationTargets, or why it could not. */
+	inline constexpr int32 PluginDescriptor = 3031;
 
 	// --- 4xxx: laid out where the game shows it, by the tool that shows it (IDreamLocContextProvider: DreamGUI)
 	/** The translation does not fit its text's box: cut, or past it. */
