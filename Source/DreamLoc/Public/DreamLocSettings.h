@@ -20,11 +20,19 @@
  *   ContentPaths=Content           ; folders of assets (default Content)
  *   ExcludePaths=...               ; path patterns left out, `*` the wildcard (default: the folders of editor modules
  *                                  ; under Source, Content/Developers and Content/Localization)
+ *   EditorOnlyData=false           ; also the texts only the editor has: C++ inside #if WITH_EDITOR, editor-only asset
+ *                                  ; properties (default false; true for a plugin's editor UI)
+ *   MetaData=false                 ; also the UCLASS / USTRUCT / UENUM / UPROPERTY / UFUNCTION meta-data the editor
+ *                                  ; shows -- DisplayName, ToolTip, ShortTooltip, Category, enum values' DisplayName --
+ *                                  ; of the types whose headers are under SourcePaths (default false)
  *
  *   [Publish]
  *   Mode=Source                    ; how a packaged game gets the translations `dloc bake` writes (default Source):
  *                                  ; Source, DreamLoc reads them and mods' .dloc files go over them; Native, the
  *                                  ; engine reads them itself (Content/Localization/DreamLoc in LocalizationPaths)
+ *   LoadingPolicy=Editor           ; a plugin's own: when the engine loads what `dloc bake -Plugin` writes into the
+ *                                  ; plugin (default Editor): Editor, in the editor only; Always, in a packaged game too;
+ *                                  ; Game, in a game and the editor's game preview
  *
  *   [Translate]                    ; the editor's translation window (DreamLocTranslate); no keys here, they are the user's
  *   Profile=deepseek               ; the translator used by default: a [Profile <name>] of the user's translators.ini
@@ -54,8 +62,14 @@ struct DREAMLOC_API FDreamLocSettings
 	TArray<FString> GatherContentPaths = { TEXT("Content") };
 	/** Path patterns (`*` matches anything) the engine gather leaves out, relative to the project. */
 	TArray<FString> GatherExcludePaths = { TEXT("Source/*Editor/*"), TEXT("Content/Developers/*"), TEXT("Content/Localization/*") };
+	/** [Gather] EditorOnlyData: the engine gather takes the texts only the editor has too. */
+	bool bGatherEditorOnlyData = false;
+	/** [Gather] MetaData: the engine gather takes the reflected types' meta-data the editor shows. */
+	bool bGatherMetaData = false;
 	/** A packaged game's translations are read by the engine itself rather than by DreamLoc ([Publish] Mode=Native). */
 	bool bPublishNative = false;
+	/** [Publish] LoadingPolicy: the engine's name for when a plugin's baked target loads -- Editor, Always or Game. */
+	FString PublishLoadingPolicy = TEXT("Editor");
 
 	/** [Translate] Profile: the translator profile used by default; empty for none. */
 	FString TranslateProfile;

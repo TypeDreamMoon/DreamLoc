@@ -2,6 +2,7 @@
 
 #include "DreamLocSettings.h"
 
+#include "Algo/Find.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -96,6 +97,18 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 		}
 		Key.TrimStartAndEndInline();
 		Value.TrimStartAndEndInline();
+		auto Boolean = [&](bool& OutValue)
+		{
+			if (Value.Equals(TEXT("true"), ESearchCase::IgnoreCase) || Value.Equals(TEXT("false"), ESearchCase::IgnoreCase))
+			{
+				OutValue = Value.Equals(TEXT("true"), ESearchCase::IgnoreCase);
+			}
+			else
+			{
+				OutDiagnostics.Emplace(EDreamLocSeverity::Error, DreamLocCode::SettingsSyntax, LineNumber, 1,
+					FString::Printf(TEXT("[%s] %s is true or false, not '%s'"), *Section, *Key, *Value));
+			}
+		};
 		bool bAppend = false;
 		if (Key.StartsWith(TEXT("+")))
 		{
@@ -161,10 +174,18 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 			{
 				SetList(Settings.GatherExcludePaths, Key, Value, bAppend);
 			}
+			else if (Key == TEXT("EditorOnlyData"))
+			{
+				Boolean(Settings.bGatherEditorOnlyData);
+			}
+			else if (Key == TEXT("MetaData"))
+			{
+				Boolean(Settings.bGatherMetaData);
+			}
 			else
 			{
 				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-					FString::Printf(TEXT("DreamLoc does not read '%s' in [Gather]; it reads SourcePaths, ContentPaths and ExcludePaths"), *Key));
+					FString::Printf(TEXT("DreamLoc does not read '%s' in [Gather]; it reads SourcePaths, ContentPaths, ExcludePaths, EditorOnlyData and MetaData"), *Key));
 			}
 		}
 		else if (Section == TEXT("Publish"))
@@ -178,10 +199,24 @@ FDreamLocSettings FDreamLocSettings::Parse(const FString& InText, TArray<FDreamL
 				OutDiagnostics.Emplace(EDreamLocSeverity::Error, DreamLocCode::SettingsSyntax, LineNumber, 1,
 					FString::Printf(TEXT("[Publish] Mode is Source or Native, not '%s'"), *Value));
 			}
+			else if (Key == TEXT("LoadingPolicy"))
+			{
+				const TCHAR* const Policies[] = { TEXT("Editor"), TEXT("Always"), TEXT("Game") };
+				const TCHAR* const* Found = Algo::FindByPredicate(Policies, [&Value](const TCHAR* InPolicy) { return Value.Equals(InPolicy, ESearchCase::IgnoreCase); });
+				if (Found != nullptr)
+				{
+					Settings.PublishLoadingPolicy = *Found;
+				}
+				else
+				{
+					OutDiagnostics.Emplace(EDreamLocSeverity::Error, DreamLocCode::SettingsSyntax, LineNumber, 1,
+						FString::Printf(TEXT("[Publish] LoadingPolicy is Editor, Always or Game, not '%s'"), *Value));
+				}
+			}
 			else
 			{
 				OutDiagnostics.Emplace(EDreamLocSeverity::Warning, DreamLocCode::SettingsUnknownKey, LineNumber, 1,
-					FString::Printf(TEXT("DreamLoc does not read '%s' in [Publish]; it reads Mode"), *Key));
+					FString::Printf(TEXT("DreamLoc does not read '%s' in [Publish]; it reads Mode and LoadingPolicy"), *Key));
 			}
 		}
 		else if (Section == TEXT("Translate"))

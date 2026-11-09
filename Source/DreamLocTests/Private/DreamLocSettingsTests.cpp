@@ -65,6 +65,24 @@ es-ES=es-419
 		FDreamLocSettings::Parse(TEXT("[Publish]\nMode=Loose\nHow=1\n"), PublishDiagnostics);
 		TestEqual(TEXT("a mode that is none, a key that is not read"), DreamLocTestUtil::Describe(PublishDiagnostics), FString(TEXT("DLOC1015@2:1 DLOC1016@3:1")));
 	}
+	{
+		// A plugin's editor UI: the editor-only texts, the meta-data, and when its baked targets load.
+		const FDreamLocSettings Defaults;
+		TestFalse(TEXT("no editor-only texts by default"), Defaults.bGatherEditorOnlyData);
+		TestFalse(TEXT("no meta-data by default"), Defaults.bGatherMetaData);
+		TestEqual(TEXT("a plugin's targets load in the editor by default"), Defaults.PublishLoadingPolicy, FString(TEXT("Editor")));
+		TArray<FDreamLocDiagnostic> PluginDiagnostics;
+		const FDreamLocSettings Plugin = FDreamLocSettings::Parse(TEXT("[Gather]\nEditorOnlyData=true\nMetaData=True\n[Publish]\nLoadingPolicy=always\n"), PluginDiagnostics);
+		TestEqual(TEXT("nothing to report"), DreamLocTestUtil::Describe(PluginDiagnostics), FString());
+		TestTrue(TEXT("EditorOnlyData"), Plugin.bGatherEditorOnlyData);
+		TestTrue(TEXT("MetaData, whatever its case"), Plugin.bGatherMetaData);
+		TestEqual(TEXT("LoadingPolicy, in the engine's spelling"), Plugin.PublishLoadingPolicy, FString(TEXT("Always")));
+		TArray<FDreamLocDiagnostic> BadDiagnostics;
+		const FDreamLocSettings Wrong = FDreamLocSettings::Parse(TEXT("[Gather]\nMetaData=yes\n[Publish]\nLoadingPolicy=Never\n"), BadDiagnostics);
+		TestEqual(TEXT("not a boolean, not a policy DreamLoc bakes"), DreamLocTestUtil::Describe(BadDiagnostics), FString(TEXT("DLOC1015@2:1 DLOC1015@4:1")));
+		TestFalse(TEXT("the default kept"), Wrong.bGatherMetaData);
+		TestEqual(TEXT("the default policy kept"), Wrong.PublishLoadingPolicy, FString(TEXT("Editor")));
+	}
 	return true;
 }
 
