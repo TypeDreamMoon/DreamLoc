@@ -63,7 +63,9 @@ a restart.
 Tools that read sources write extraction manifests: one JSON file per source under
 `Intermediate/DLoc/extract/<tool>/`. DreamGUI writes one for each `.dui` it compiles. `dloc gather` runs the
 engine's own text gather -- C++ `LOCTEXT` / `NSLOCTEXT`, FText properties of assets -- as far as its manifest and
-turns it into one Engine manifest per file (`dloc.ini` `[Gather]` says which folders). `dloc sync` then brings each
+turns it into one Engine manifest per file (`dloc.ini` `[Gather]` says which folders; `EditorOnlyData=true` adds the
+texts inside `#if WITH_EDITOR`, `MetaData=true` the reflected types' display names, tooltips and categories, each in
+the header its type is in, with the engine's own namespaces and keys). `dloc sync` then brings each
 target language's `.dloc` files up to date:
 
 - a new key gets an entry with its `src`; a changed source keeps the translation and records the old source as

@@ -32,6 +32,15 @@ namespace DreamLocEngine
 		TArray<FString> ContentPaths;
 		/** Path patterns left out, relative to the project. */
 		TArray<FString> ExcludePaths;
+		/** The texts only the editor has too: C++ inside #if WITH_EDITOR, editor-only asset properties. */
+		bool bEditorOnlyData = false;
+		/**
+		 * The meta-data of the reflected types whose headers are under SourcePaths too, as the engine gathers its own
+		 * editor's: DisplayName in UObjectDisplayNames, ToolTip and ShortTooltip in UObjectToolTips and
+		 * UObjectShortTooltips (keyed by the field's path), Category in UObjectCategory (keyed by itself). Enum values'
+		 * display names are in UObjectDisplayNames, which the engine leaves out of its own.
+		 */
+		bool bMetaData = false;
 		/** The culture the source texts are in. */
 		FString NativeCulture = TEXT("zh-Hans");
 		/** Where the Engine manifests go; empty: the project's extract folder. */
@@ -59,9 +68,10 @@ namespace DreamLocEngine
 	DREAMLOCEDITOR_API FGatherResult Gather(const FGatherOptions& InOptions);
 
 	/**
-	 * The engine's gather manifest as extraction manifests, one per file, each text under the first file it was found in.
+	 * The engine's gather manifest as extraction manifests, one per file, each text once per file it was found in.
 	 * C++ texts are in line order and carry no line in `at` (a line number would change with every edit above it); an
-	 * asset's texts carry the object path inside the package.
+	 * asset's texts carry the object path inside the package; a meta-data text is in the header its type is declared
+	 * in, with the field in `at` (`DreamCanvas:SortOrder`) and what it is in `kind` (`ToolTip (IntProperty)`).
 	 */
 	DREAMLOCEDITOR_API bool ReadGatherManifest(const FString& InManifestPath, const FString& InProjectDirectory, const FString& InNativeCulture,
 		TArray<FDreamLocExtractManifest>& OutManifests, FString& OutError);

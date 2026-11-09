@@ -15,6 +15,7 @@
 #include "Misc/Guid.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "SourceCodeNavigation.h"
 #include "UObject/Package.h"
 
 namespace DreamLocEngineLocal
@@ -94,6 +95,80 @@ namespace DreamLocEngineLocal
 		return !OutFile.IsEmpty();
 	}
 
+	/**
+	 * A meta-data text's location -- `/Script/DreamGUI.DreamCanvas:SortOrder [IntProperty ToolTip meta-data]`, an enum
+	 * value's `/Script/DreamGUI.EDreamFit:Fill [EnumEntry DisplayName meta-data]` -- as the header the type is declared
+	 * in, the field (`DreamCanvas:SortOrder`) and what the text is (`ToolTip (IntProperty)`).
+	 */
+	bool SplitScript(const FString& InLocation, const FString& InProjectDirectory, FString& OutFile, FString& OutWhere, FString& OutKind)
+	{
+		if (!InLocation.StartsWith(TEXT("/Script/")))
+		{
+			return false;
+		}
+		FString Path = InLocation;
+		int32 Bracket = INDEX_NONE;
+		if (Path.FindChar(TEXT('['), Bracket))
+		{
+			FString What = Path.Mid(Bracket + 1);
+			What.RemoveFromEnd(TEXT("]"));
+			What.RemoveFromEnd(TEXT(" meta-data"));
+			FString Field;
+			FString Key;
+			OutKind = What.Split(TEXT(" "), &Field, &Key) ? FString::Printf(TEXT("%s (%s)"), *Key, *Field) : What;
+			Path.LeftInline(Bracket);
+			Path.TrimEndInline();
+		}
+		// The type is the object the package holds: everything up to the first ':' (a property's, a function's, an
+		// enum value's own name comes after it).
+		int32 Colon = INDEX_NONE;
+		const FString TypePath = Path.FindChar(TEXT(':'), Colon) ? Path.Left(Colon) : Path;
+		const UField* Type = FindObject<UField>(nullptr, *TypePath);
+		FString Header;
+		if (Type == nullptr || !FSourceCodeNavigation::FindClassHeaderPath(Type, Header))
+		{
+			return false;
+		}
+		OutFile = RelativeTo(FPaths::ConvertRelativePathToFull(Header), InProjectDirectory);
+		int32 Dot = INDEX_NONE;
+		OutWhere = Path.FindChar(TEXT('.'), Dot) ? Path.RightChop(Dot + 1) : Path;
+		return !OutFile.IsEmpty();
+	}
+
+	/**
+	 * The engine's own meta-data steps for its Editor, PropertyNames, ToolTips and Category targets
+	 * (Engine/Config/Localization/PropertyNames.ini, ToolTips.ini, Category.ini), with the folders searched and the
+	 * excludes of dloc.ini for the engine's folder list, and enum values' display names gathered too (the engine's
+	 * PropertyNames.ini leaves enums out).
+	 */
+	void AppendMetaDataSteps(FString& InOutConfig, int32& InOutStep, const TArray<FString>& InDirectories, const TArray<FString>& InExcludes)
+	{
+		auto Begin = [&]()
+		{
+			InOutConfig += FString::Printf(TEXT("\n[GatherTextStep%d]\nCommandletClass=GatherTextFromMetaData\n"), InOutStep++);
+			for (const FString& Directory : InDirectories)
+			{
+				InOutConfig += FString::Printf(TEXT("IncludePathFilters=%s/*\n"), *Directory);
+			}
+			for (const FString& Exclude : InExcludes)
+			{
+				InOutConfig += FString::Printf(TEXT("ExcludePathFilters=%s\n"), *Exclude);
+			}
+			InOutConfig += TEXT("ExcludePathFilters=*/NoRedist/*\nExcludePathFilters=*/NotForLicensees/*\nExcludePathFilters=*/LimitedAccess/*\n");
+		};
+		// PropertyNames.ini, less FieldTypesToExclude=Enum.
+		Begin();
+		InOutConfig += TEXT("FieldTypesToExclude=Function\nFieldOwnerTypesToExclude=K2Node\nFieldOuterTypesToExclude=Function\n");
+		InOutConfig += TEXT("InputKeys=DisplayName\nOutputNamespaces=UObjectDisplayNames\nOutputKeys=\"{FieldPath}\"\nShouldGatherFromEditorOnlyData=true\n");
+		// ToolTips.ini.
+		Begin();
+		InOutConfig += TEXT("InputKeys=ToolTip\nOutputNamespaces=UObjectToolTips\nOutputKeys=\"{FieldPath}\"\n");
+		InOutConfig += TEXT("InputKeys=ShortTooltip\nOutputNamespaces=UObjectShortTooltips\nOutputKeys=\"{FieldPath}\"\nShouldGatherFromEditorOnlyData=true\n");
+		// Category.ini.
+		Begin();
+		InOutConfig += TEXT("InputKeys=Category\nOutputNamespaces=UObjectCategory\nOutputKeys=\"{MetaDataValue}\"\nShouldGatherFromEditorOnlyData=true\n");
+	}
+
 	FString WriteGatherConfig(const DreamLocEngine::FGatherOptions& InOptions, const FString& InProject, const FString& InWork, const FString& InManifestName)
 	{
 		auto Absolute = [&InProject](const FString& InPath)
@@ -131,7 +206,17 @@ namespace DreamLocEngineLocal
 			{
 				Config += FString::Printf(TEXT("ExcludePathFilters=%s\n"), *Absolute(Exclude));
 			}
-			Config += TEXT("FileNameFilters=*.h\nFileNameFilters=*.cpp\nFileNameFilters=*.inl\nShouldGatherFromEditorOnlyData=false\n");
+			Config += TEXT("FileNameFilters=*.h\nFileNameFilters=*.cpp\nFileNameFilters=*.inl\n");
+			Config += FString::Printf(TEXT("ShouldGatherFromEditorOnlyData=%s\n"), InOptions.bEditorOnlyData ? TEXT("true") : TEXT("false"));
+			if (InOptions.bMetaData)
+			{
+				TArray<FString> Excludes;
+				for (const FString& Exclude : InOptions.ExcludePaths)
+				{
+					Excludes.Add(Absolute(Exclude));
+				}
+				AppendMetaDataSteps(Config, Step, SourceDirectories, Excludes);
+			}
 		}
 		TArray<FString> ContentDirectories;
 		for (const FString& Path : InOptions.ContentPaths)
@@ -152,7 +237,8 @@ namespace DreamLocEngineLocal
 			{
 				Config += FString::Printf(TEXT("ExcludePathFilters=%s\n"), *Absolute(Exclude));
 			}
-			Config += TEXT("PackageFileNameFilters=*.umap\nPackageFileNameFilters=*.uasset\nShouldGatherFromEditorOnlyData=false\nbFixBroken=false\n");
+			Config += TEXT("PackageFileNameFilters=*.umap\nPackageFileNameFilters=*.uasset\nbFixBroken=false\n");
+			Config += FString::Printf(TEXT("ShouldGatherFromEditorOnlyData=%s\n"), InOptions.bEditorOnlyData ? TEXT("true") : TEXT("false"));
 		}
 		Config += FString::Printf(TEXT("\n[GatherTextStep%d]\nCommandletClass=GenerateGatherManifest\n"), Step++);
 		return Config;
@@ -180,6 +266,8 @@ DreamLocEngine::FGatherOptions DreamLocEngine::MakeGatherOptions(const FDreamLoc
 	Options.SourcePaths = InSettings.GatherSourcePaths;
 	Options.ContentPaths = InSettings.GatherContentPaths;
 	Options.ExcludePaths = InSettings.GatherExcludePaths;
+	Options.bEditorOnlyData = InSettings.bGatherEditorOnlyData;
+	Options.bMetaData = InSettings.bGatherMetaData;
 	Options.NativeCulture = InSettings.SourceCulture;
 	return Options;
 }
@@ -201,14 +289,18 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 
 	TMap<FString, TArray<FGathered>> ByFile;
 	TArray<FString> FileOrder;
+	// A text once per file: a category is one text however many fields of a header are in it. (The same key with
+	// another source stays, for sync to warn of.)
+	TSet<FString> Seen;
 	Helper.EnumerateSourceTexts([&](TSharedRef<FManifestEntry> InEntry) -> bool
 	{
 		for (const FManifestContext& Context : InEntry->Contexts)
 		{
 			FString File;
 			FString Where;
+			FString Kind;
 			int32 Line = 0;
-			if (!SplitAsset(Context.SourceLocation, Project, File, Where))
+			if (!SplitAsset(Context.SourceLocation, Project, File, Where) && !SplitScript(Context.SourceLocation, Project, File, Where, Kind))
 			{
 				SplitLine(Context.SourceLocation, File, Line);
 				File = RelativeTo(File, Project);
@@ -221,9 +313,16 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 			FGathered Gathered;
 			Gathered.Namespace = InEntry->Namespace.GetString();
 			Gathered.Entry.Key = Context.Key.GetString();
+			bool bSeen = false;
+			Seen.Add(File + TEXT("\x1F") + MakeIdKey(Gathered.Namespace, Gathered.Entry.Key) + TEXT("\x1F") + InEntry->Source.Text, &bSeen);
+			if (bSeen)
+			{
+				continue;
+			}
 			Gathered.Entry.Source = InEntry->Source.Text;
 			Gathered.Entry.At = Where;
 			Gathered.Entry.Note = Context.DevNotes;
+			Gathered.Entry.Kind = Kind;
 			Gathered.Line = Line;
 			if (!ByFile.Contains(File))
 			{

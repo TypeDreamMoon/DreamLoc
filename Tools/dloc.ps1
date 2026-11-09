@@ -17,8 +17,9 @@
 #                                     never rewritten
 #   dloc.ps1 show -Culture C [-Root R]
 #                                     the translations the engine would get for that culture, and from which file
-#   dloc.ps1 gather [-Plugin P]       run the engine's text gather (C++ LOCTEXT, asset FTexts; dloc.ini [Gather])
-#                                     into Engine extraction manifests
+#   dloc.ps1 gather [-Plugin P]       run the engine's text gather (C++ LOCTEXT, asset FTexts, with [Gather]
+#                                     MetaData=true the reflected types' display names, tooltips and categories;
+#                                     dloc.ini [Gather]) into Engine extraction manifests
 #   dloc.ps1 sync [-Gather] [-Plugin P] [-Culture C] [-DryRun]
 #                                     bring every target culture's .dloc files up to date with the extraction
 #                                     manifests: new keys, changed sources, renames, removed texts; -Gather first

@@ -372,6 +372,8 @@ namespace DreamLocCommandletLocal
 			OutOwner.Settings.GatherSourcePaths = Defaults.GatherSourcePaths;
 			OutOwner.Settings.GatherContentPaths = Defaults.GatherContentPaths;
 			OutOwner.Settings.GatherExcludePaths = Defaults.GatherExcludePaths;
+			OutOwner.Settings.bGatherEditorOnlyData = Defaults.bGatherEditorOnlyData;
+			OutOwner.Settings.bGatherMetaData = Defaults.bGatherMetaData;
 		}
 		return true;
 	}
