@@ -226,7 +226,9 @@ prompt cut to a local model's context shows up in the token count. Failures and 
 
 The log folds away, can show only the failures, and copies to the clipboard (Copy takes the lines shown, Ctrl+C the
 lines selected). "Open the report" opens the report once the run is done. The same lines go to `LogDreamLocTranslate`
-(Display, and Warning for what went wrong) and into the report's `log`.
+(Display, and Warning for what went wrong) and into the report's `log`. Asking a translator about one entry, an AI fix
+and Translate again show their failure next to the entry, along with any run already under way that kept them from
+starting.
 
 Translators are set up once per user in `%APPDATA%/DreamLoc/translators.ini` (the **Translators** page edits it and
 tests each), never in the project, since keys live there:

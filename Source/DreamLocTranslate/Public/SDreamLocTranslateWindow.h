@@ -151,6 +151,13 @@ public:
 	/** The log of the run under way, else of the last one: its lines from InFrom on, added to OutLines. */
 	void ReadRunLog(int32 InFrom, TArray<FDreamLocTranslateLogLine>& OutLines) const;
 
+	/**
+	 * What the last action on one entry came to -- a translator asked, an AI fix, Translate again: why it failed, or that
+	 * a run under way kept it from starting -- while that entry is the one shown; empty when there is nothing to say.
+	 */
+	FText GetEntryNote() const;
+	bool IsEntryNoteFailure() const { return bEntryNoteFailure; }
+
 	/** Opens the AI pre-translate dialog; the dialog, for a test to drive. */
 	TSharedPtr<class SDreamLocPretranslateDialog> OpenPretranslate();
 
@@ -187,6 +194,9 @@ private:
 	/** The entry the list shows after InFrom (wrapping), the first that passes InWanted; null when none does. */
 	TSharedPtr<FDreamLocReviewEntry> FindAfter(const TSharedPtr<FDreamLocReviewEntry>& InFrom, TFunctionRef<bool(const FDreamLocReviewEntry&)> InWanted) const;
 	void OnRunFinished(const FDreamLocTranslateResult& InResult, TFunction<void(const FDreamLocTranslateResult&)> InOnDone);
+	void SetEntryNote(const FString& InCandidateKey, const FText& InNote, bool bInFailure, bool bInBusy = false);
+	/** The note for an action a run under way kept from starting. */
+	void NoteBusy();
 	void WatchDirectory();
 	void UnwatchDirectory();
 	EActiveTimerReturnType ReloadWhenQuiet(double InCurrentTime, float InDeltaTime);
@@ -237,6 +247,12 @@ private:
 	FDreamLocTranslateResult LastResult;
 	TArray<FString> LastErrors;
 	FText StatusText;
+	/** GetEntryNote's, and the entry it is about (its CandidateKey). */
+	FText EntryNote;
+	FString EntryNoteKey;
+	bool bEntryNoteFailure = false;
+	/** The note says a run kept the action from starting: gone when the run is. */
+	bool bEntryNoteBusy = false;
 	TWeakPtr<SWindow> PretranslateWindow;
 
 	TMap<FString, TArray<FDreamLocCandidate>> Asked;

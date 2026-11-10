@@ -246,6 +246,28 @@ void SDreamLocTranslateEditor::Construct(const FArguments& InArgs, const TShared
 					.Text_Lambda([this]() { return GetPreviewText(); })
 				]
 			]
+			// What the last action on this entry came to: why a translator asked, an AI fix or Translate again failed.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocTranslate.EntryNote")))
+				.AutoWrapText(true)
+				.Visibility_Lambda([this]()
+				{
+					const TSharedPtr<SDreamLocTranslateWindow> Pinned = Window.Pin();
+					return Entry.IsValid() && Pinned.IsValid() && !Pinned->GetEntryNote().IsEmpty() ? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				.ColorAndOpacity_Lambda([this]()
+				{
+					const TSharedPtr<SDreamLocTranslateWindow> Pinned = Window.Pin();
+					return Pinned.IsValid() && Pinned->IsEntryNoteFailure() ? FSlateColor(FStyleColors::Error) : FSlateColor::UseSubduedForeground();
+				})
+				.Text_Lambda([this]()
+				{
+					const TSharedPtr<SDreamLocTranslateWindow> Pinned = Window.Pin();
+					return Pinned.IsValid() ? Pinned->GetEntryNote() : FText::GetEmpty();
+				})
+			]
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)
 			[
 				SNew(SHorizontalBox).Visibility_Lambda(Visible)

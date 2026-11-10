@@ -1126,8 +1126,13 @@ FDreamLocTranslateRequest SDreamLocTranslateWindow::MakeEntriesRequest(TConstArr
 
 bool SDreamLocTranslateWindow::Retranslate()
 {
-	if (!Current.IsValid() || IsRunning())
+	if (!Current.IsValid())
 	{
+		return false;
+	}
+	if (IsRunning())
+	{
+		NoteBusy();
 		return false;
 	}
 	KeepEdit();
@@ -1136,7 +1141,43 @@ bool SDreamLocTranslateWindow::Retranslate()
 	{
 		ClearCurrent();
 	}
-	return Current.IsValid() && StartRun(MakeEntriesRequest({ Current }, Profile));
+	if (!Current.IsValid())
+	{
+		return false;
+	}
+	const FString Key = CandidateKey(*Current);
+	const FString Namespace = Current->Entry.Namespace;
+	const FString EntryKey = Current->Entry.Key;
+	const FString By = !Profile.IsEmpty() ? Profile : Settings.GetTranslateProfile(Culture);
+	SetEntryNote(Key, FText::Format(LOCTEXT("TranslatingAgain", "Translate again ({0}): translating..."), FText::FromString(By)), false);
+	// Called by OnRunFinished, on the window: it is there.
+	return StartRun(MakeEntriesRequest({ Current }, Profile), [this, Key, Namespace, EntryKey, By](const FDreamLocTranslateResult& InResult)
+	{
+		const FDreamLocTranslateRow* Row = InResult.Rows.FindByPredicate([&Namespace, &EntryKey](const FDreamLocTranslateRow& InRow)
+		{
+			return InRow.Namespace == Namespace && InRow.Key == EntryKey;
+		});
+		TArray<FString> Said;
+		if (Row != nullptr && Row->Status != EDreamLocTranslateStatus::Translated)
+		{
+			Said.Add(Row->Reason);
+			if (!Row->Problems.IsEmpty())
+			{
+				Said.Add(Row->Problems);
+			}
+			if (!Row->RejectedText.IsEmpty())
+			{
+				Said.Add(FText::Format(LOCTEXT("TurnedDown", "it gave \"{0}\""), FText::FromString(Row->RejectedText)).ToString());
+			}
+		}
+		Said.Append(InResult.Errors);
+		if (Row == nullptr && Said.IsEmpty())
+		{
+			Said.Add(LOCTEXT("NothingCame", "nothing came back for it").ToString());
+		}
+		SetEntryNote(Key, Said.IsEmpty() ? FText::GetEmpty()
+			: FText::Format(LOCTEXT("TranslateAgainFailed", "Translate again ({0}): {1}"), FText::FromString(By), FText::FromString(FString::Join(Said, TEXT("; ")))), !Said.IsEmpty());
+	});
 }
 
 bool SDreamLocTranslateWindow::TranslateEntries(TConstArrayView<TSharedPtr<FDreamLocReviewEntry>> InEntries, const FString& InProfile)
@@ -1187,6 +1228,10 @@ void SDreamLocTranslateWindow::OnRunFinished(const FDreamLocTranslateResult& InR
 	Running.Reset();
 	LastResult = InResult;
 	LastErrors = InResult.Errors;
+	if (bEntryNoteBusy)
+	{
+		SetEntryNote(FString(), FText::GetEmpty(), false);
+	}
 	Reload();
 	if (InResult.Errors.Num() > 0)
 	{
@@ -1247,6 +1292,28 @@ void SDreamLocTranslateWindow::ReadRunLog(int32 InFrom, TArray<FDreamLocTranslat
 	else
 	{
 		Read(LastResult.Log);
+	}
+}
+
+FText SDreamLocTranslateWindow::GetEntryNote() const
+{
+	return Current.IsValid() && !EntryNoteKey.IsEmpty() && CandidateKey(*Current) == EntryNoteKey ? EntryNote : FText::GetEmpty();
+}
+
+void SDreamLocTranslateWindow::SetEntryNote(const FString& InCandidateKey, const FText& InNote, bool bInFailure, bool bInBusy)
+{
+	EntryNoteKey = InNote.IsEmpty() ? FString() : InCandidateKey;
+	EntryNote = InNote;
+	bEntryNoteFailure = bInFailure && !InNote.IsEmpty();
+	bEntryNoteBusy = bInBusy && !InNote.IsEmpty();
+}
+
+void SDreamLocTranslateWindow::NoteBusy()
+{
+	if (Current.IsValid())
+	{
+		SetEntryNote(CandidateKey(*Current), LOCTEXT("RunUnderWay", "A translation run is under way (the toolbar shows how far it has got): this one entry waits until it is done or cancelled."),
+			/*bInFailure*/ true, /*bInBusy*/ true);
 	}
 }
 
@@ -1395,8 +1462,19 @@ bool SDreamLocTranslateWindow::FixWithAI(const FString& InProblem)
 
 bool SDreamLocTranslateWindow::StartSuggestion(const FString& InProfile, const FString& InFrom, const FString& InAmendText, const FString& InAmendProblems)
 {
-	if (!Current.IsValid() || IsRunning() || !MayGoTo(*Current, InProfile))
+	if (!Current.IsValid())
 	{
+		return false;
+	}
+	if (IsRunning())
+	{
+		NoteBusy();
+		return false;
+	}
+	if (!MayGoTo(*Current, InProfile))
+	{
+		SetEntryNote(CandidateKey(*Current), FText::Format(LOCTEXT("MayNotGo", "{0}: this entry may not go to it (no such translator, or the entry is [Translate] LocalOnly and it is not local)."),
+			FText::FromString(InFrom)), true);
 		return false;
 	}
 	FDreamLocTranslateRequest Request = MakeEntriesRequest({ Current }, InProfile);
@@ -1408,16 +1486,19 @@ bool SDreamLocTranslateWindow::StartSuggestion(const FString& InProfile, const F
 	const FString From = InFrom;
 	UE_LOG(LogDreamLocTranslate, Verbose, TEXT("asking %s for %s/%s %s%s"), *InProfile, *Culture, *Current->Entry.Namespace, *Current->Entry.Key,
 		InAmendText.IsEmpty() ? TEXT("") : TEXT(" (a fix)"));
+	SetEntryNote(Key, FText::Format(LOCTEXT("Asking", "{0}: asking..."), FText::FromString(From)), false);
 	// Called by OnRunFinished, on the window: it is there.
 	return StartRun(Request, [this, Key, From](const FDreamLocTranslateResult& InResult)
 	{
 		TArray<FString> Said;
+		bool bCame = false;
 		for (const FDreamLocTranslateRow& Row : InResult.Rows)
 		{
 			const FString& Text = !Row.NewText.IsEmpty() ? Row.NewText : Row.RejectedText;
 			if (!Text.IsEmpty())
 			{
 				Asked.FindOrAdd(Key).Add({ Text, From, Row.Problems });
+				bCame = true;
 			}
 			else if (!Row.Reason.IsEmpty())
 			{
@@ -1425,8 +1506,13 @@ bool SDreamLocTranslateWindow::StartSuggestion(const FString& InProfile, const F
 			}
 		}
 		Said.Append(InResult.Errors);
-		StatusText = Said.IsEmpty() ? FText::Format(LOCTEXT("CandidateCame", "{0}: a candidate"), FText::FromString(From))
-			: FText::Format(LOCTEXT("CandidateFailed", "{0}: {1}"), FText::FromString(From), FText::FromString(FString::Join(Said, TEXT("; "))));
+		if (!bCame && Said.IsEmpty())
+		{
+			Said.Add(LOCTEXT("NothingCame", "nothing came back for it").ToString());
+		}
+		const FText Failed = FText::Format(LOCTEXT("CandidateFailed", "{0}: {1}"), FText::FromString(From), FText::FromString(FString::Join(Said, TEXT("; "))));
+		StatusText = Said.IsEmpty() ? FText::Format(LOCTEXT("CandidateCame", "{0}: a candidate"), FText::FromString(From)) : Failed;
+		SetEntryNote(Key, Said.IsEmpty() ? FText::GetEmpty() : Failed, !Said.IsEmpty());
 		if (Editor.IsValid())
 		{
 			Editor->RebuildCandidates();

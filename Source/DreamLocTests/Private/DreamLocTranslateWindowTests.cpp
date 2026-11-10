@@ -1486,4 +1486,56 @@ bool FDreamLocTranslateRunLogTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateEntryNoteTest, "DreamLoc.Translate.Window.WhyAskingForOneEntryFailedShowsByTheEntry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateEntryNoteTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!BeginTurnedDown(*this, S, TEXT("TranslateEntryNote")))
+	{
+		return false;
+	}
+
+	const FDeskRef D = MakeDesk(S);
+	TArray<TFunction<bool()>> Steps;
+	AddCheck(Steps, D, [this, D]()
+	{
+		TestTrue(TEXT("the story's line chosen"), D->Window->Select(TEXT("Intro"), TEXT("Line")));
+		TestTrue(TEXT("nothing to say about it yet"), D->Window->GetEntryNote().IsEmpty());
+	});
+	AddClick(*this, Steps, D, TEXT("Ask model"), [D]() { return D->Tagged(TEXT("DreamLocTranslate.Ask.model")); });
+	AddWait(*this, Steps, D, TEXT("the translator asked"), 60.0, [D]() { return !D->Window->IsRunning(); });
+	AddCheck(Steps, D, [this, D]()
+	{
+		TestEqual(TEXT("why, by the entry"), D->Window->GetEntryNote().ToString(), TEXT("model: HTTP 400: MissingSessionID"));
+		TestTrue(TEXT("as a failure"), D->Window->IsEntryNoteFailure());
+		TestEqual(TEXT("shown"), TextUnder(D->Tagged(TEXT("DreamLocTranslate.EntryNote"))), TEXT("model: HTTP 400: MissingSessionID"));
+		TestTrue(TEXT("and in that run's log"), D->Window->GetLastResult().Log.ContainsByPredicate([](const FDreamLocTranslateLogLine& InLine)
+		{
+			return InLine.Level == EDreamLocTranslateLogLevel::Error && InLine.Text.Contains(TEXT("en  Story/Intro.dloc  1 text  model  failed"));
+		}));
+	});
+	AddClick(*this, Steps, D, TEXT("Translate again"), [D]() { return D->Tagged(TEXT("DreamLocTranslate.Retranslate")); });
+	AddWait(*this, Steps, D, TEXT("the entry translated again"), 60.0, [D]() { return !D->Window->IsRunning(); });
+	AddCheck(Steps, D, [this, D]()
+	{
+		TestEqual(TEXT("why, by the entry"), D->Window->GetEntryNote().ToString(), TEXT("Translate again (model): HTTP 400: MissingSessionID"));
+		TestTrue(TEXT("the menu's Start chosen"), D->Window->Select(TEXT("Menu"), TEXT("Start")));
+		TestTrue(TEXT("another entry: nothing to say"), D->Window->GetEntryNote().IsEmpty());
+		TestTrue(TEXT("the story's line again"), D->Window->Select(TEXT("Intro"), TEXT("Line")));
+		TestEqual(TEXT("its note back"), D->Window->GetEntryNote().ToString(), TEXT("Translate again (model): HTTP 400: MissingSessionID"));
+		// A run under way: asking does not start, and says so.
+		TestTrue(TEXT("a run of the menu's Quit"), D->Window->TranslateEntries({ D->Window->GetModel().Find(TEXT("Menu"), TEXT("Quit")) }, FString()));
+		TestFalse(TEXT("asking meanwhile does not start"), D->Window->AskForCandidate(TEXT("model")));
+		TestTrue(FString::Printf(TEXT("and says why (%s)"), *D->Window->GetEntryNote().ToString()), D->Window->GetEntryNote().ToString().Contains(TEXT("under way")));
+		TestFalse(TEXT("nor does Translate again"), D->Window->Retranslate());
+	});
+	AddWait(*this, Steps, D, TEXT("the menu's run"), 60.0, [D]() { return !D->Window->IsRunning(); });
+	AddCheck(Steps, D, [this, D]() { TestTrue(TEXT("the note gone with the run"), D->Window->GetEntryNote().IsEmpty()); });
+	AddEnd(Steps, D);
+	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
 #endif
