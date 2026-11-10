@@ -104,13 +104,18 @@ FDreamLocTranslateReply FDreamLocOpenAITranslator::Translate(const FDreamLocTran
 	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Response.Body);
 	const TArray<TSharedPtr<FJsonValue>>* Choices = nullptr;
 	FString Content;
+	FString FinishReason;
 	if (FJsonSerializer::Deserialize(Reader, Root) && Root.IsValid() && Root->TryGetArrayField(TEXT("choices"), Choices) && Choices != nullptr && Choices->Num() > 0)
 	{
 		const TSharedPtr<FJsonObject>* Choice = nullptr;
 		const TSharedPtr<FJsonObject>* Message = nullptr;
-		if ((*Choices)[0]->TryGetObject(Choice) && (*Choice)->TryGetObjectField(TEXT("message"), Message))
+		if ((*Choices)[0]->TryGetObject(Choice))
 		{
-			(*Message)->TryGetStringField(TEXT("content"), Content);
+			(*Choice)->TryGetStringField(TEXT("finish_reason"), FinishReason);
+			if ((*Choice)->TryGetObjectField(TEXT("message"), Message))
+			{
+				(*Message)->TryGetStringField(TEXT("content"), Content);
+			}
 		}
 		const TSharedPtr<FJsonObject>* Usage = nullptr;
 		if (Root->TryGetObjectField(TEXT("usage"), Usage))
@@ -124,6 +129,13 @@ FDreamLocTranslateReply FDreamLocOpenAITranslator::Translate(const FDreamLocTran
 	{
 		Reply.bMalformed = true;
 		Reply.Error = TEXT("the answer is not the JSON asked for");
+		// For the log: what came instead, and why the model stopped when it did not finish (length: cut off).
+		const FString& Came = Content.IsEmpty() ? Response.Body : Content;
+		Reply.Detail = Came.IsEmpty() ? FString(TEXT("it was empty")) : TEXT("it began: ") + DreamLocTranslatePrompt::OneLine(Came);
+		if (!FinishReason.IsEmpty() && FinishReason != TEXT("stop"))
+		{
+			Reply.Detail = FString::Printf(TEXT("it stopped for %s; %s"), *FinishReason, *Reply.Detail);
+		}
 		return Reply;
 	}
 	Reply.bSucceeded = true;

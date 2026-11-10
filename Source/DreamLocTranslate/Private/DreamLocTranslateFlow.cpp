@@ -58,6 +58,50 @@ namespace DreamLocTranslateFlowLocal
 		return InText;
 	}
 
+	/** "1 text", "3 texts". */
+	FString Count(int32 InCount, const TCHAR* InOne, const TCHAR* InMany)
+	{
+		return FString::Printf(TEXT("%d %s"), InCount, InCount == 1 ? InOne : InMany);
+	}
+
+	/** The run's log: each line kept, given to the caller and to LogDreamLocTranslate, one at a time, with no secret in it. */
+	struct FLogger
+	{
+		const DreamLocTranslateFlow::FLog* OnLine = nullptr;
+		TArray<FString> Secrets;
+		FCriticalSection Lock;
+		TArray<FDreamLocTranslateLogLine> Lines;
+
+		void Add(EDreamLocTranslateLogLevel InLevel, const FString& InCulture, const FString& InText)
+		{
+			FDreamLocTranslateLogLine Line;
+			Line.Time = FDateTime::Now();
+			Line.Level = InLevel;
+			Line.Culture = InCulture;
+			Line.Text = Scrub(InText, Secrets);
+			FScopeLock ScopeLock(&Lock);
+			if (InLevel == EDreamLocTranslateLogLevel::Info)
+			{
+				UE_LOG(LogDreamLocTranslate, Display, TEXT("%s"), *Line.Text);
+			}
+			else
+			{
+				UE_LOG(LogDreamLocTranslate, Warning, TEXT("%s"), *Line.Text);
+			}
+			if (OnLine != nullptr && *OnLine)
+			{
+				(*OnLine)(Line);
+			}
+			Lines.Add(MoveTemp(Line));
+		}
+
+		TArray<FDreamLocTranslateLogLine> Of(const FString& InCulture)
+		{
+			FScopeLock ScopeLock(&Lock);
+			return Lines.FilterByPredicate([&InCulture](const FDreamLocTranslateLogLine& InLine) { return InLine.Culture == InCulture; });
+		}
+	};
+
 	/** One text to translate in a culture: the entries of the same source (and kind) sent once. */
 	struct FItem
 	{
@@ -493,16 +537,21 @@ namespace DreamLocTranslateFlowLocal
 		int64 Characters = 0;
 	};
 
-	/** One batch: sent again after a network error, 429 or 5xx (waiting longer each time), and once after an answer that does not read. */
+	/**
+	 * One batch: sent again after a network error, 429 or 5xx (waiting longer each time), and once after an answer that
+	 * does not read. Each try is a line of the log, InWhat first (the culture, the file, the texts, the translator).
+	 */
 	FDreamLocTranslateReply SendWithRetries(IDreamLocTranslator& InTranslator, const FDreamLocTranslateBatch& InBatch, int32 InCharacters,
-		const FDreamLocTranslateRequest& InRequest, const TAtomic<bool>& InCancel, FCriticalSection& InLock, FStats& InOutStats)
+		const FDreamLocTranslateRequest& InRequest, const TAtomic<bool>& InCancel, FCriticalSection& InLock, FStats& InOutStats, FLogger& InLog, const FString& InWhat)
 	{
 		FDreamLocTranslateReply Reply;
 		int32 NetworkTries = 0;
 		bool bResent = false;
 		for (;;)
 		{
+			const double Sent = FPlatformTime::Seconds();
 			Reply = InTranslator.Translate(InBatch, InCancel);
+			const double Took = FPlatformTime::Seconds() - Sent;
 			{
 				FScopeLock ScopeLock(&InLock);
 				++InOutStats.Requests;
@@ -510,18 +559,42 @@ namespace DreamLocTranslateFlowLocal
 				InOutStats.CompletionTokens += Reply.CompletionTokens;
 				InOutStats.Characters += InCharacters;
 			}
-			if (Reply.bSucceeded || InCancel.Load())
+			// How much it took: a large model's tokens (a prompt cut to the model's context shows here), else the characters.
+			const FString Usage = Reply.PromptTokens + Reply.CompletionTokens > 0 ? FString::Printf(TEXT("  %lld + %lld tokens"), Reply.PromptTokens, Reply.CompletionTokens)
+				: Reply.bSucceeded ? FString::Printf(TEXT("  %d characters"), InCharacters) : FString();
+			if (Reply.bSucceeded)
 			{
+				InLog.Add(EDreamLocTranslateLogLevel::Info, InBatch.Culture, FString::Printf(TEXT("%s  ok  %.1f s%s"), *InWhat, Took, *Usage));
+				TMap<FString, int32> Said;
+				for (const FString& Warning : Reply.Warnings)
+				{
+					++Said.FindOrAdd(Warning);
+				}
+				for (const TPair<FString, int32>& Warning : Said)
+				{
+					InLog.Add(EDreamLocTranslateLogLevel::Warning, InBatch.Culture, Warning.Value > 1 ? FString::Printf(TEXT("%s: %s (%d times)"), *InWhat, *Warning.Key, Warning.Value)
+						: FString::Printf(TEXT("%s: %s"), *InWhat, *Warning.Key));
+				}
 				return Reply;
 			}
+			if (InCancel.Load())
+			{
+				InLog.Add(EDreamLocTranslateLogLevel::Info, InBatch.Culture, FString::Printf(TEXT("%s  cancelled  %.1f s"), *InWhat, Took));
+				return Reply;
+			}
+			const FString Why = (Reply.Error.IsEmpty() ? FString(TEXT("the request failed")) : Reply.Error) + (Reply.Detail.IsEmpty() ? FString() : TEXT(" (") + Reply.Detail + TEXT(")"));
+			const FString Failed = FString::Printf(TEXT("%s  failed  %.1f s%s  %s"), *InWhat, Took, *Usage, *Why);
 			if (Reply.bMalformed && !bResent)
 			{
+				InLog.Add(EDreamLocTranslateLogLevel::Warning, InBatch.Culture, Failed + TEXT("; sent again"));
 				bResent = true;
 				continue;
 			}
 			if (Reply.bRetryable && NetworkTries < InRequest.NetworkRetries)
 			{
-				const double Until = FPlatformTime::Seconds() + InRequest.RetryDelaySeconds * FMath::Pow(2.0, double(NetworkTries));
+				const double Delay = InRequest.RetryDelaySeconds * FMath::Pow(2.0, double(NetworkTries));
+				InLog.Add(EDreamLocTranslateLogLevel::Warning, InBatch.Culture, FString::Printf(TEXT("%s; sent again in %.0f s"), *Failed, Delay));
+				const double Until = FPlatformTime::Seconds() + Delay;
 				++NetworkTries;
 				while (FPlatformTime::Seconds() < Until && !InCancel.Load())
 				{
@@ -533,12 +606,13 @@ namespace DreamLocTranslateFlowLocal
 				}
 				continue;
 			}
+			InLog.Add(EDreamLocTranslateLogLevel::Error, InBatch.Culture, Failed);
 			return Reply;
 		}
 	}
 
 	void SendAll(TArray<FBatch>& InOutBatches, const FCulturePlan& InPlan, const FPrepared& InPrepared, const FDreamLocTranslateRequest& InRequest,
-		const DreamLocTranslateFlow::FProgress& InOnProgress, FDreamLocTranslateProgress& InOutProgress, FStats& InOutStats, const TAtomic<bool>& InCancel)
+		const DreamLocTranslateFlow::FProgress& InOnProgress, FDreamLocTranslateProgress& InOutProgress, FStats& InOutStats, const TAtomic<bool>& InCancel, FLogger& InLog)
 	{
 		FCriticalSection Lock;
 		TAtomic<int32> Next(0);
@@ -553,7 +627,19 @@ namespace DreamLocTranslateFlowLocal
 				}
 				FBatch& Batch = InOutBatches[Index];
 				const FDreamLocTranslateBatch Request = MakeRequest(Batch, InPlan, InPrepared);
-				Batch.Reply = SendWithRetries(*Batch.Translator, Request, Batch.Characters, InRequest, InCancel, Lock, InOutStats);
+				int32 Entries = 0;
+				for (const int32 Item : Batch.Items)
+				{
+					Entries += InPlan.Items[Item].Entries.Num();
+				}
+				FString What = FString::Printf(TEXT("%s  %s  %s"), *InPlan.Culture, Request.Units.Num() > 0 ? *Request.Units[0].File : TEXT(""),
+					*Count(Batch.Items.Num(), TEXT("text"), TEXT("texts")));
+				if (Entries != Batch.Items.Num())
+				{
+					What += FString::Printf(TEXT(" (%d entries)"), Entries);
+				}
+				What += TEXT("  ") + Batch.Translator->GetProfile().Name;
+				Batch.Reply = SendWithRetries(*Batch.Translator, Request, Batch.Characters, InRequest, InCancel, Lock, InOutStats, InLog, What);
 				Batch.bSent = true;
 				FScopeLock ScopeLock(&Lock);
 				++InOutProgress.BatchesDone;
@@ -660,9 +746,33 @@ namespace DreamLocTranslateFlowLocal
 		InOutItem.Backend = InOutItem.Translator->GetProfile().Name;
 	}
 
+	/** Where an item is, for the log: its file, its namespace and key, and how many more entries share its text. */
+	FString PlaceOf(const FItem& InItem)
+	{
+		FString Out = FString::Printf(TEXT("%s  %s / %s"), *InItem.Unit.File, *InItem.Unit.Namespace, *InItem.Unit.Key);
+		if (InItem.Entries.Num() > 1)
+		{
+			Out += FString::Printf(TEXT(" (and %d more)"), InItem.Entries.Num() - 1);
+		}
+		return Out;
+	}
+
+	/** After HandOver: the item failed for good, or went on to the Fallback. */
+	void LogHandOver(FLogger& InLog, const FString& InCulture, const FItem& InItem, const FString& InWhy, const FString& InText)
+	{
+		FString Line = FString::Printf(TEXT("%s  %s  "), *InCulture, *PlaceOf(InItem));
+		Line += InItem.bDecided ? TEXT("failed: ") + InWhy : FString::Printf(TEXT("to %s: %s"), *InItem.Translator->GetProfile().Name, *InWhy);
+		Line += TEXT("; src ") + DreamLocTranslatePrompt::OneLine(InItem.Unit.Source);
+		if (!InText.IsEmpty())
+		{
+			Line += TEXT("; turned down ") + DreamLocTranslatePrompt::OneLine(InText);
+		}
+		InLog.Add(InItem.bDecided ? EDreamLocTranslateLogLevel::Error : EDreamLocTranslateLogLevel::Warning, InCulture, Line);
+	}
+
 	/** What a round's answers decide: each item translated, sent again, handed over, or failed. */
 	void Take(TArray<FBatch>& InBatches, FCulturePlan& InOutPlan, const FPrepared& InPrepared, const FString& InOwnerDirectory, const TAtomic<bool>& InCancel,
-		TArray<FString>& OutWarnings)
+		TArray<FString>& OutWarnings, FLogger& InLog)
 	{
 		struct FCandidate
 		{
@@ -688,6 +798,7 @@ namespace DreamLocTranslateFlowLocal
 				FItem& Item = InOutPlan.Items[Index];
 				if (!Batch.Reply.bSucceeded)
 				{
+					// The request's line in the log says why: not a line for each of its texts.
 					HandOver(Item, InOutPlan, Source, Batch.Reply.Error.IsEmpty() ? FString(TEXT("the request failed")) : Batch.Reply.Error, FString(), FString(),
 						InCancel.Load());
 				}
@@ -698,7 +809,9 @@ namespace DreamLocTranslateFlowLocal
 				else
 				{
 					const FString* Error = Batch.Reply.UnitErrors.Find(Item.Unit.Id);
-					HandOver(Item, InOutPlan, Source, Error != nullptr ? *Error : FString(TEXT("the answer has no translation for it")), FString(), FString(), false);
+					const FString Why = Error != nullptr ? *Error : FString(TEXT("the answer has no translation for it"));
+					HandOver(Item, InOutPlan, Source, Why, FString(), FString(), false);
+					LogHandOver(InLog, InOutPlan.Culture, Item, Why, FString());
 				}
 			}
 		}
@@ -732,10 +845,55 @@ namespace DreamLocTranslateFlowLocal
 				++Item.Retries;
 				Item.Unit.LastText = Candidate.Text;
 				Item.Unit.Problems = Candidate.Failing;
+				InLog.Add(EDreamLocTranslateLogLevel::Warning, InOutPlan.Culture, FString::Printf(TEXT("%s  %s  the checks turned it down, sent again: %s; src %s; turned down %s"),
+					*InOutPlan.Culture, *PlaceOf(Item), *Candidate.Failing, *DreamLocTranslatePrompt::OneLine(Item.Unit.Source), *DreamLocTranslatePrompt::OneLine(Candidate.Text)));
 				continue;
 			}
 			HandOver(Item, InOutPlan, Source, TEXT("the checks turned it down"), Candidate.Text, Candidate.Failing, false);
+			LogHandOver(InLog, InOutPlan.Culture, Item, TEXT("the checks turned it down: ") + Candidate.Failing, Candidate.Text);
 		}
+	}
+
+	/** Why a culture's entries failed, the commonest first, and what the checks said (each code, in how many). */
+	FString WhyFailed(TConstArrayView<FDreamLocTranslateRow> InRows)
+	{
+		TMap<FString, int32> ByReason;
+		TMap<FString, int32> ByCode;
+		for (const FDreamLocTranslateRow& Row : InRows)
+		{
+			if (Row.Status != EDreamLocTranslateStatus::Failed)
+			{
+				continue;
+			}
+			++ByReason.FindOrAdd(Row.Reason.IsEmpty() ? FString(TEXT("no reason given")) : Row.Reason);
+			TSet<FString> Codes;
+			for (int32 At = Row.Problems.Find(TEXT("DLOC"), ESearchCase::CaseSensitive); At != INDEX_NONE;
+				At = Row.Problems.Find(TEXT("DLOC"), ESearchCase::CaseSensitive, ESearchDir::FromStart, At + 4))
+			{
+				const FString Digits = Row.Problems.Mid(At + 4, 4);
+				if (Digits.Len() == 4 && FCString::IsNumeric(*Digits))
+				{
+					Codes.Add(TEXT("DLOC") + Digits);
+				}
+			}
+			for (const FString& Code : Codes)
+			{
+				++ByCode.FindOrAdd(Code);
+			}
+		}
+		ByReason.ValueStableSort([](int32 A, int32 B) { return A > B; });
+		ByCode.ValueStableSort([](int32 A, int32 B) { return A > B; });
+		TArray<FString> Parts;
+		for (const TPair<FString, int32>& Reason : ByReason)
+		{
+			Parts.Add(FString::Printf(TEXT("%d %s"), Reason.Value, *Reason.Key));
+		}
+		TArray<FString> Codes;
+		for (const TPair<FString, int32>& Code : ByCode)
+		{
+			Codes.Add(FString::Printf(TEXT("%s %d"), *Code.Key, Code.Value));
+		}
+		return FString::Join(Parts, TEXT(", ")) + (Codes.IsEmpty() ? FString() : TEXT("; the checks said ") + FString::Join(Codes, TEXT(", ")));
 	}
 
 	const TCHAR* StatusName(EDreamLocTranslateStatus InStatus)
@@ -749,7 +907,7 @@ namespace DreamLocTranslateFlowLocal
 	}
 
 	FString WriteReport(const FString& InDirectory, const FCulturePlan& InPlan, const FPrepared& InPrepared, TConstArrayView<FDreamLocTranslateRow> InRows,
-		const FStats& InStats, double InSeconds, bool bInCancelled, TConstArrayView<FString> InWarnings)
+		const FStats& InStats, double InSeconds, bool bInCancelled, TConstArrayView<FString> InWarnings, TConstArrayView<FDreamLocTranslateLogLine> InLog)
 	{
 		const TSharedRef<FJsonObject> Root = MakeShared<FJsonObject>();
 		Root->SetStringField(TEXT("culture"), InPlan.Culture);
@@ -799,6 +957,12 @@ namespace DreamLocTranslateFlowLocal
 			Warnings.Add(MakeShared<FJsonValueString>(Warning));
 		}
 		Root->SetArrayField(TEXT("warnings"), Warnings);
+		TArray<TSharedPtr<FJsonValue>> Log;
+		for (const FDreamLocTranslateLogLine& Line : InLog)
+		{
+			Log.Add(MakeShared<FJsonValueString>(Line.Format()));
+		}
+		Root->SetArrayField(TEXT("log"), Log);
 		FString Json;
 		FJsonSerializer::Serialize(Root, TJsonWriterFactory<>::Create(&Json));
 
@@ -811,6 +975,11 @@ namespace DreamLocTranslateFlowLocal
 		}
 		return FFileHelper::SaveStringToFile(Scrub(Json, InPrepared.Secrets), *Path, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM) ? Path : FString();
 	}
+}
+
+FString FDreamLocTranslateLogLine::Format() const
+{
+	return Time.ToString(TEXT("%H:%M:%S")) + TEXT("  ") + Text;
 }
 
 bool DreamLocTranslateFlow::IsLocalOnly(TConstArrayView<FString> InPrefixes, const FString& InFile, const FString& InNamespace)
@@ -908,29 +1077,38 @@ FDreamLocTranslateEstimate DreamLocTranslateFlow::Estimate(const FDreamLocTransl
 	return Out;
 }
 
-FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequest& InRequest, const FProgress& InProgress, const TAtomic<bool>& InCancel)
+FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequest& InRequest, const FProgress& InProgress, const TAtomic<bool>& InCancel,
+	const FLog& InLog)
 {
 	using namespace DreamLocTranslateFlowLocal;
 	const double Started = FPlatformTime::Seconds();
 	FDreamLocTranslateResult Result;
 	FPrepared Prepared;
 	Prepare(InRequest, Prepared);
-	auto Finish = [&Result, &Prepared, Started]()
+	FLogger Log;
+	Log.OnLine = &InLog;
+	Log.Secrets = Prepared.Secrets;
+	auto Finish = [&Result, &Prepared, &Log, Started]()
 	{
 		for (FString& Error : Result.Errors)
 		{
 			Error = Scrub(Error, Prepared.Secrets);
-			UE_LOG(LogDreamLocTranslate, Warning, TEXT("%s"), *Error);
+			Log.Add(EDreamLocTranslateLogLevel::Error, FString(), Error);
 		}
 		for (FString& Warning : Result.Warnings)
 		{
 			Warning = Scrub(Warning, Prepared.Secrets);
 		}
 		Result.Seconds = FPlatformTime::Seconds() - Started;
+		Result.Log = MoveTemp(Log.Lines);
 		return Result;
 	};
 	Result.Errors = Prepared.Errors;
 	Result.Warnings = Prepared.Warnings;
+	for (const FString& Warning : Prepared.Warnings)
+	{
+		Log.Add(EDreamLocTranslateLogLevel::Warning, FString(), Warning);
+	}
 	if (Result.Errors.Num() > 0)
 	{
 		return Finish();
@@ -944,6 +1122,28 @@ FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequ
 		TArray<FString> Warnings;
 		FDreamLocTranslateProgress Progress;
 		Progress.Culture = Plan.Culture;
+		{
+			int32 ToSend = 0;
+			int32 LeftOut = 0;
+			for (const FItem& Item : Plan.Items)
+			{
+				if (Item.bDecided)
+				{
+					LeftOut += Item.Entries.Num();
+				}
+				else
+				{
+					++ToSend;
+				}
+			}
+			FString Line = FString::Printf(TEXT("DreamLoc translate %s: %s, %s to send to %s"), *Plan.Culture, *Count(Plan.Collected.Entries.Num(), TEXT("entry"), TEXT("entries")),
+				*Count(ToSend, TEXT("text"), TEXT("texts")), *Plan.Main->GetProfile().Name);
+			if (Plan.Fallback != nullptr)
+			{
+				Line += FString::Printf(TEXT(" (Fallback %s)"), *Plan.Fallback->GetProfile().Name);
+			}
+			Log.Add(EDreamLocTranslateLogLevel::Info, Plan.Culture, Line + FString::Printf(TEXT(", %d left out"), LeftOut));
+		}
 		for (int32 Round = 0; Round < 64 && !InCancel.Load(); ++Round)
 		{
 			TArray<FBatch> Batches = MakeBatches(Plan, Prepared.Settings.TranslateBatchSize);
@@ -960,8 +1160,8 @@ FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequ
 			{
 				InProgress(Progress);
 			}
-			SendAll(Batches, Plan, Prepared, InRequest, InProgress, Progress, Stats, InCancel);
-			Take(Batches, Plan, Prepared, InRequest.OwnerDirectory, InCancel, Warnings);
+			SendAll(Batches, Plan, Prepared, InRequest, InProgress, Progress, Stats, InCancel, Log);
+			Take(Batches, Plan, Prepared, InRequest.OwnerDirectory, InCancel, Warnings, Log);
 		}
 		for (FItem& Item : Plan.Items)
 		{
@@ -1028,6 +1228,7 @@ FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequ
 				else if (Message.Diagnostic.Severity == EDreamLocSeverity::Warning)
 				{
 					Warnings.Add(Message.Format());
+					Log.Add(EDreamLocTranslateLogLevel::Warning, Plan.Culture, Message.Format());
 				}
 			}
 			if (Output.bBlocked)
@@ -1050,18 +1251,23 @@ FDreamLocTranslateResult DreamLocTranslateFlow::Run(const FDreamLocTranslateRequ
 			Warning = Scrub(Warning, Prepared.Secrets);
 		}
 		const double Seconds = FPlatformTime::Seconds() - CultureStarted;
-		const FString Report = InRequest.bSuggest ? FString() : WriteReport(ReportDirectory, Plan, Prepared, Rows, Stats, Seconds, InCancel.Load(), Warnings);
-		if (!Report.IsEmpty())
-		{
-			Result.ReportPaths.Add(Report);
-		}
 		int32 Counts[3] = { 0, 0, 0 };
 		for (const FDreamLocTranslateRow& Row : Rows)
 		{
 			++Counts[int32(Row.Status)];
 		}
-		UE_LOG(LogDreamLocTranslate, Display, TEXT("DreamLoc translate %s: %d translated, %d failed, %d skipped; %d request(s) to %s in %.1f s"), *Plan.Culture,
-			Counts[0], Counts[1], Counts[2], Stats.Requests, *Plan.Main->GetProfile().Name, Seconds);
+		Log.Add(EDreamLocTranslateLogLevel::Info, Plan.Culture, FString::Printf(TEXT("DreamLoc translate %s: %d translated, %d failed, %d skipped; %d request(s) to %s in %.1f s, %lld + %lld tokens"),
+			*Plan.Culture, Counts[0], Counts[1], Counts[2], Stats.Requests, *Plan.Main->GetProfile().Name, Seconds, Stats.PromptTokens, Stats.CompletionTokens));
+		if (Counts[int32(EDreamLocTranslateStatus::Failed)] > 0)
+		{
+			Log.Add(EDreamLocTranslateLogLevel::Error, Plan.Culture, FString::Printf(TEXT("DreamLoc translate %s: why they failed: %s"), *Plan.Culture, *WhyFailed(Rows)));
+		}
+		const FString Report = InRequest.bSuggest ? FString() : WriteReport(ReportDirectory, Plan, Prepared, Rows, Stats, Seconds, InCancel.Load(), Warnings, Log.Of(Plan.Culture));
+		if (!Report.IsEmpty())
+		{
+			Result.ReportPaths.Add(Report);
+			Log.Add(EDreamLocTranslateLogLevel::Info, Plan.Culture, FString::Printf(TEXT("DreamLoc translate %s: the report: %s"), *Plan.Culture, *Report));
+		}
 		Result.Translated += Counts[int32(EDreamLocTranslateStatus::Translated)];
 		Result.Failed += Counts[int32(EDreamLocTranslateStatus::Failed)];
 		Result.Skipped += Counts[int32(EDreamLocTranslateStatus::Skipped)];

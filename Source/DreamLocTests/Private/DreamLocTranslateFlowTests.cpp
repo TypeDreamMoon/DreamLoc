@@ -486,6 +486,92 @@ bool FDreamLocTranslateSecretsTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("the log has the run"), InS.LogText.Contains(TEXT("DreamLoc translate en")));
 		TestFalse(TEXT("no key in the log"), InS.LogText.Contains(Key));
 		TestFalse(TEXT("none in the result's messages"), FString::Join(InS.Result.Errors, TEXT("\n")).Contains(Key) || FString::Join(InS.Result.Warnings, TEXT("\n")).Contains(Key));
+		TestTrue(TEXT("the run's log says what the service said"), InS.LogLinesText().Contains(TEXT("Incorrect API key provided: ***")));
+		TestFalse(TEXT("but not the key"), InS.LogLinesText().Contains(Key));
+	}));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateLogTest, "DreamLoc.Translate.Flow.TheLogSaysWhatEachRequestCameToAndWhyATextFailed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateLogTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateFlowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!S->Begin(*this, TEXT("TranslateLog")))
+	{
+		return false;
+	}
+	S->Write(TEXT("dloc.ini"), Ini(TEXT("Profile=model\nRetry=0\nConcurrency=1\n")));
+	S->Write(TEXT("en/A.dloc"), MakeDloc(TEXT("en"), TEXT("Gone"), { { TEXT("Hello"), TEXT("你好") } }));
+	S->Write(TEXT("en/B.dloc"), MakeDloc(TEXT("en"), TEXT("Bag"), { { TEXT("Count"), TEXT("共{Count}件") }, { TEXT("Lost"), TEXT("丢失") }, { TEXT("Fine"), TEXT("很好") } }));
+	S->Write(TEXT("en/C.dloc"), MakeDloc(TEXT("en"), TEXT("Prose"), { { TEXT("Line"), TEXT("很久以前") } }));
+	// A: the service turns the request down. B: one argument lost, one entry without a text, one right. C: prose, twice.
+	S->Fake->Chat = [](const FChat& InChat)
+	{
+		FChatAnswer Answer;
+		const FString Namespace = InChat.Entries.Num() > 0 ? InChat.Entries[0]->GetStringField(TEXT("ns")) : FString();
+		if (Namespace == TEXT("Gone"))
+		{
+			Answer.Status = 400;
+			Answer.RawBody = TEXT("{\"error\":{\"message\":\"MissingSessionID\"}}");
+			return Answer;
+		}
+		if (Namespace == TEXT("Prose"))
+		{
+			Answer.Content = TEXT("Sure! Here is the translation:\nOnce upon a time");
+			return Answer;
+		}
+		TArray<FString> Parts;
+		for (const TSharedPtr<FJsonObject>& Entry : InChat.Entries)
+		{
+			const int32 Id = int32(Entry->GetNumberField(TEXT("id")));
+			const FString Key = Entry->GetStringField(TEXT("key"));
+			Parts.Add(Key == TEXT("Lost") ? FString::Printf(TEXT("{\"id\":%d}"), Id)
+				: FString::Printf(TEXT("{\"id\":%d,\"text\":\"%s\"}"), Id, Key == TEXT("Count") ? TEXT("en: total") : *DreamLocTranslateFake::Mark(TEXT("en"), Entry->GetStringField(TEXT("src")))));
+		}
+		Answer.Content = TEXT("{\"entries\":[") + FString::Join(Parts, TEXT(",")) + TEXT("]}");
+		return Answer;
+	};
+	FDreamLocTranslateRequest Request = S->MakeRequest();
+	Request.Profiles = { S->Fake->Profile(TEXT("OpenAI"), TEXT("model")) };
+	S->Run(Request, /*bInCaptureLog*/ true);
+	ADD_LATENT_AUTOMATION_COMMAND(FAfterRun(this, S, [this](FScenario& InS)
+	{
+		using ELevel = EDreamLocTranslateLogLevel;
+		const FString All = InS.LogLinesText();
+		auto Has = [this, &InS, &All](const TCHAR* InWhat, ELevel InLevel, TArray<FString> InParts)
+		{
+			if (InS.FindLogLine(InLevel, InParts) == nullptr)
+			{
+				AddError(FString::Printf(TEXT("the log: %s -- no line (level %d) with: %s\nThe log:\n%s"), InWhat, int32(InLevel), *FString::Join(InParts, TEXT(" | ")), *All));
+			}
+		};
+		TestEqual(TEXT("one translated, four failed"), FString::Printf(TEXT("%d %d"), InS.Result.Translated, InS.Result.Failed), TEXT("1 4"));
+		TestEqual(TEXT("every line given as it was written, and kept in the result"), InS.LogLines.Num(), InS.Result.Log.Num());
+		Has(TEXT("what the culture sends"), ELevel::Info, { TEXT("DreamLoc translate en: 5 entries, 5 texts to send to model, 0 left out") });
+		Has(TEXT("a request that came back: its file, texts, translator, time, tokens"), ELevel::Info, { TEXT("en  B.dloc  3 texts  model  ok  "), TEXT(" s  100 + 20 tokens") });
+		Has(TEXT("what the answer left out"), ELevel::Warning, { TEXT("en  B.dloc  3 texts  model: an answer entry without a text was left out") });
+		Has(TEXT("a request the service turned down, in its words"), ELevel::Error, { TEXT("en  A.dloc  1 text  model  failed  "), TEXT(" s  HTTP 400: MissingSessionID") });
+		const FString Prose = TEXT("100 + 20 tokens  the answer is not the JSON asked for (it began: \"Sure! Here is the translation:\\nOnce upon a time\")");
+		Has(TEXT("an answer that does not read, how it began, sent again"), ELevel::Warning, { TEXT("en  C.dloc  1 text  model  failed  "), Prose + TEXT("; sent again") });
+		Has(TEXT("and failed again"), ELevel::Error, { TEXT("en  C.dloc  1 text  model  failed  "), Prose });
+		Has(TEXT("a text the checks turned down: what they said, its source, what came"), ELevel::Error,
+			{ TEXT("en  B.dloc  Bag / Count  failed: the checks turned it down: DLOC2001"), TEXT("; src \"共{Count}件\"; turned down \"en: total\"") });
+		Has(TEXT("a text the answer has none for"), ELevel::Error, { TEXT("en  B.dloc  Bag / Lost  failed: the answer has no translation for it; src \"丢失\"") });
+		Has(TEXT("what the culture came to"), ELevel::Info, { TEXT("DreamLoc translate en: 1 translated, 4 failed, 0 skipped; 4 request(s) to model in "), TEXT(" s, 300 + 60 tokens") });
+		Has(TEXT("why its entries failed"), ELevel::Error, { TEXT("DreamLoc translate en: why they failed: "), TEXT("1 HTTP 400: MissingSessionID"), TEXT("1 the checks turned it down"),
+			TEXT("1 the answer has no translation for it"), TEXT("1 the answer is not the JSON asked for"), TEXT("; the checks said "), TEXT("DLOC2001 1") });
+		TestEqual(TEXT("a report"), InS.Result.ReportPaths.Num(), 1);
+		if (InS.Result.ReportPaths.Num() == 1)
+		{
+			Has(TEXT("where the report is"), ELevel::Info, { TEXT("DreamLoc translate en: the report: ") + InS.Result.ReportPaths[0] });
+			FString Report;
+			FFileHelper::LoadFileToString(Report, *InS.Result.ReportPaths[0]);
+			TestTrue(TEXT("the report has the log"), Report.Contains(TEXT("\"log\"")) && Report.Contains(TEXT("en  A.dloc  1 text  model  failed")));
+		}
+		TestTrue(TEXT("the lines in the Output Log too"), InS.LogText.Contains(TEXT("LogDreamLocTranslate: en  A.dloc  1 text  model  failed")));
+		TestTrue(TEXT("a line on one line: a break in a text written as \\n"), !All.Contains(TEXT("translation:\nOnce")));
 	}));
 	return true;
 }

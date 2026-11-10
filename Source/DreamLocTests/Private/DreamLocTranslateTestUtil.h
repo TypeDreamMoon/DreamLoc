@@ -97,6 +97,9 @@ namespace DreamLocTranslateTestUtil
 		TFunction<void(FScenario&, const FDreamLocTranslateProgress&)> OnProgress;
 		TUniquePtr<FLogCapture> Log;
 		FString LogText;
+		/** The run's log lines as they were written, from the run's threads. */
+		TArray<FDreamLocTranslateLogLine> LogLines;
+		mutable FCriticalSection LogLinesLock;
 
 		bool Begin(FAutomationTestBase& InTest, const TCHAR* InName)
 		{
@@ -175,7 +178,44 @@ namespace DreamLocTranslateTestUtil
 					{
 						Self->OnProgress(*Self, InProgress);
 					}
-				}, Self->Cancel);
+				}, Self->Cancel, [Self](const FDreamLocTranslateLogLine& InLine)
+				{
+					FScopeLock ScopeLock(&Self->LogLinesLock);
+					Self->LogLines.Add(InLine);
+				});
+			});
+		}
+
+		/** The log lines written so far, each with its time, one a line. */
+		FString LogLinesText() const
+		{
+			FScopeLock ScopeLock(&LogLinesLock);
+			TArray<FString> Out;
+			for (const FDreamLocTranslateLogLine& Line : LogLines)
+			{
+				Out.Add(Line.Format());
+			}
+			return FString::Join(Out, TEXT("\n"));
+		}
+
+		/** The log line of that level that has every one of these in it; null when none does. */
+		const FDreamLocTranslateLogLine* FindLogLine(EDreamLocTranslateLogLevel InLevel, TConstArrayView<FString> InParts) const
+		{
+			FScopeLock ScopeLock(&LogLinesLock);
+			return LogLines.FindByPredicate([InLevel, &InParts](const FDreamLocTranslateLogLine& InLine)
+			{
+				if (InLine.Level != InLevel)
+				{
+					return false;
+				}
+				for (const FString& Part : InParts)
+				{
+					if (!InLine.Text.Contains(Part, ESearchCase::CaseSensitive))
+					{
+						return false;
+					}
+				}
+				return true;
 			});
 		}
 

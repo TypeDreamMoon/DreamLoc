@@ -236,3 +236,13 @@ bool DreamLocTranslatePrompt::ParseAnswer(const FString& InContent, const FDream
 	}
 	return true;
 }
+
+FString DreamLocTranslatePrompt::OneLine(const FString& InText, int32 InMax)
+{
+	FString Out = InText.Replace(TEXT("\r"), TEXT("\\r")).Replace(TEXT("\n"), TEXT("\\n")).Replace(TEXT("\t"), TEXT("\\t"));
+	if (Out.Len() > InMax)
+	{
+		Out = Out.Left(FMath::Max(0, InMax - 3)) + TEXT("...");
+	}
+	return TEXT("\"") + Out + TEXT("\"");
+}

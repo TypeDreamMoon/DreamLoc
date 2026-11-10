@@ -68,14 +68,21 @@ struct DREAMLOCTRANSLATE_API FDreamLocTranslateRequest
  * Blocks until done: call it from a worker thread, with the game thread ticking (a tool that lays texts out, for the
  * checks, does it there). InCancel stops it between requests and cuts the requests under way; what was translated by
  * then is still checked and written. InProgress is called from the worker threads, one call at a time.
+ *
+ * As it goes it keeps a log (FDreamLocTranslateLogLine): a line for each request as it comes back, each text that
+ * failed or the checks turned down, what each culture came to and why its entries failed. InLog is called with each
+ * line, from the worker threads, one call at a time; every line also goes to LogDreamLocTranslate (Display, or Warning
+ * for what went wrong), into the result's Log and into the report.
  */
 namespace DreamLocTranslateFlow
 {
 	using FProgress = TFunction<void(const FDreamLocTranslateProgress&)>;
+	using FLog = TFunction<void(const FDreamLocTranslateLogLine&)>;
 
 	DREAMLOCTRANSLATE_API FDreamLocTranslateEstimate Estimate(const FDreamLocTranslateRequest& InRequest);
 
-	DREAMLOCTRANSLATE_API FDreamLocTranslateResult Run(const FDreamLocTranslateRequest& InRequest, const FProgress& InProgress, const TAtomic<bool>& InCancel);
+	DREAMLOCTRANSLATE_API FDreamLocTranslateResult Run(const FDreamLocTranslateRequest& InRequest, const FProgress& InProgress, const TAtomic<bool>& InCancel,
+		const FLog& InLog = FLog());
 
 	/**
 	 * The machine translations there are, as rows to review (no run): the request's cultures, files and entries, each

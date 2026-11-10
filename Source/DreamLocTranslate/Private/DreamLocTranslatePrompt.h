@@ -19,4 +19,7 @@ namespace DreamLocTranslatePrompt
 
 	/** The model's answer into InOutReply's texts; false when it is not the JSON asked for. */
 	bool ParseAnswer(const FString& InContent, const FDreamLocTranslateBatch& InBatch, FDreamLocTranslateReply& InOutReply);
+
+	/** A text in quotes on one line, for a log: its breaks and tabs written as \n and \t, cut after InMax characters. */
+	FString OneLine(const FString& InText, int32 InMax = 160);
 }

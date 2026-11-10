@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "DreamLocExtract.h"
+#include "Misc/DateTime.h"
 
 DREAMLOCTRANSLATE_API DECLARE_LOG_CATEGORY_EXTERN(LogDreamLocTranslate, Log, All);
 
@@ -121,6 +122,8 @@ struct DREAMLOCTRANSLATE_API FDreamLocTranslateReply
 	bool bMalformed = false;
 	int32 HttpStatus = 0;
 	FString Error;
+	/** More about a failure, for the run's log: how an answer that does not read began, why the model stopped. */
+	FString Detail;
 	/** Unit id -> its translation. A unit the reply has no text for failed. */
 	TMap<int32, FString> Texts;
 	/** Unit id -> why it failed, for a unit that failed on its own (a placeholder lost, a language not served). */
@@ -160,6 +163,33 @@ struct DREAMLOCTRANSLATE_API FDreamLocTranslateRow
 	EDreamLocTranslateStatus Status = EDreamLocTranslateStatus::Skipped;
 };
 
+/** How a line of a run's log reads: as it should be, gone wrong and tried again (or handed on), failed. */
+enum class EDreamLocTranslateLogLevel : uint8
+{
+	Info,
+	Warning,
+	Error,
+};
+
+/**
+ * One line of a run's log, written as it happens: a request as it came back (its file, how many texts, the translator,
+ * how long it took, the tokens, why it failed), a text that failed or the checks turned down (what they said, its source
+ * and the translation turned down), what each culture came to. No secret is in it.
+ */
+struct DREAMLOCTRANSLATE_API FDreamLocTranslateLogLine
+{
+	FDateTime Time;
+	EDreamLocTranslateLogLevel Level = EDreamLocTranslateLogLevel::Info;
+	FString Culture;
+	/** The line, the culture first; on one line (a text's breaks written as \n). */
+	FString Text;
+
+	/** Something went wrong, whether or not it was tried again. */
+	bool IsFailure() const { return Level != EDreamLocTranslateLogLevel::Info; }
+	/** As a log shows it: the time, then the text. */
+	FString Format() const;
+};
+
 struct DREAMLOCTRANSLATE_API FDreamLocTranslateResult
 {
 	TArray<FDreamLocTranslateRow> Rows;
@@ -177,6 +207,8 @@ struct DREAMLOCTRANSLATE_API FDreamLocTranslateResult
 	/** What went wrong before anything was sent (no such profile, a file that does not read...). */
 	TArray<FString> Errors;
 	TArray<FString> Warnings;
+	/** The run's log, every line in the order written. */
+	TArray<FDreamLocTranslateLogLine> Log;
 };
 
 /** What a run would send, before it is sent. */
