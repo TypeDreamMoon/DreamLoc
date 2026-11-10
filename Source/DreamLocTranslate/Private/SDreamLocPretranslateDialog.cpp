@@ -3,18 +3,28 @@
 #include "SDreamLocPretranslateDialog.h"
 
 #include "DreamLocTranslateConfig.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "HAL/PlatformProcess.h"
 #include "SDreamLocTranslateWindow.h"
 #include "Styling/AppStyle.h"
+#include "Styling/CoreStyle.h"
+#include "Styling/StyleColors.h"
 #include "Types/ISlateMetaData.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SSpacer.h"
 #include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Views/SListView.h"
+#include "Widgets/Views/STableRow.h"
 
 #define LOCTEXT_NAMESPACE "DreamLocPretranslateDialog"
 
@@ -169,12 +179,17 @@ void SDreamLocPretranslateDialog::Construct(const FArguments& InArgs, const TSha
 				]
 			]
 			+ SVerticalBox::Slot().AutoHeight()[Heading(LOCTEXT("EstimateHeading", "What it sends"))]
-			+ SVerticalBox::Slot().FillHeight(1.0f).Padding(0.0f, 4.0f, 0.0f, 10.0f)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 10.0f)
 			[
 				SNew(STextBlock)
 				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocPretranslate.Estimate")))
 				.AutoWrapText(true)
 				.Text_Lambda([this]() { return ResultText.IsEmpty() ? EstimateText : FText::Format(LOCTEXT("ResultAndEstimate", "{0}\n\n{1}"), ResultText, EstimateText); })
+			]
+			// The buttons at the bottom while the log is folded away; under the estimate while the log takes the room.
+			+ SVerticalBox::Slot().FillHeight(1.0f)
+			[
+				SNew(SSpacer).Visibility_Lambda([this]() { return bLogOpen ? EVisibility::Collapsed : EVisibility::Visible; })
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -206,6 +221,36 @@ void SDreamLocPretranslateDialog::Construct(const FArguments& InArgs, const TSha
 							: LOCTEXT("Start", "Translate");
 					})
 					.OnClicked_Lambda([this]() { Start(); return FReply::Handled(); })
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 10.0f, 0.0f, 0.0f)[MakeLogHeader()]
+			+ SVerticalBox::Slot().FillHeight(1.0f).Padding(0.0f, 4.0f, 0.0f, 0.0f)
+			[
+				SNew(SBorder)
+				.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocPretranslate.Log")))
+				.Visibility_Lambda([this]() { return bLogOpen ? EVisibility::Visible : EVisibility::Collapsed; })
+				.BorderImage(FAppStyle::GetBrush(TEXT("ToolPanel.GroupBorder")))
+				.Padding(2.0f)
+				[
+					SNew(SOverlay)
+					+ SOverlay::Slot()
+					[
+						SAssignNew(LogList, SListView<TSharedPtr<FDreamLocTranslateLogLine>>)
+						.ListItemsSource(&ShownLog)
+						.SelectionMode(ESelectionMode::Multi)
+						.OnGenerateRow(this, &SDreamLocPretranslateDialog::MakeLogRow)
+					]
+					+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
+					[
+						SNew(STextBlock)
+						.Visibility_Lambda([this]() { return ShownLog.IsEmpty() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+						.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+						.Text_Lambda([this]()
+						{
+							return LogLines.IsEmpty() ? LOCTEXT("LogEmpty", "Nothing yet: a line for each request as it comes back, and for each text that fails.")
+								: LOCTEXT("LogNoFailures", "Nothing went wrong.");
+						})
+					]
 				]
 			]
 		]
@@ -420,9 +465,228 @@ bool SDreamLocPretranslateDialog::Start()
 			Args.Add(TEXT("Cancelled"), InResult.bCancelled ? LOCTEXT("WasCancelled", " (cancelled)") : FText::GetEmpty());
 			Dialog->ResultText = InResult.Errors.Num() > 0 ? FText::FromString(FString::Join(InResult.Errors, TEXT("\n")))
 				: FText::Format(LOCTEXT("Done", "Done: {Translated} translated, {Failed} failed, {Skipped} skipped{Cancelled}. They wait in the review window, under To review."), Args);
+			if (InResult.Errors.IsEmpty() && InResult.Failed > 0)
+			{
+				Dialog->ResultText = FText::Format(LOCTEXT("DoneWhy", "{0} The log below says why each failed."), Dialog->ResultText);
+			}
 			Dialog->Recount();
 		}
 	});
+}
+
+// ---------------------------------------------------------------------------------------------------------- the log
+
+TSharedRef<SWidget> SDreamLocPretranslateDialog::MakeLogHeader()
+{
+	using namespace DreamLocPretranslateDialogLocal;
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+		[
+			SNew(SButton)
+			.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocPretranslate.LogToggle")))
+			.ButtonStyle(FAppStyle::Get(), TEXT("NoBorder"))
+			.ToolTipText(LOCTEXT("LogToggleTip", "Show or fold away the log of the run"))
+			.OnClicked_Lambda([this]() { SetLogOpen(!bLogOpen); return FReply::Handled(); })
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(0.0f, 0.0f, 4.0f, 0.0f)
+				[
+					SNew(SImage)
+					.ColorAndOpacity(FSlateColor::UseForeground())
+					.Image_Lambda([this]() { return FAppStyle::GetBrush(bLogOpen ? TEXT("TreeArrow_Expanded") : TEXT("TreeArrow_Collapsed")); })
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Heading(LOCTEXT("LogHeading", "Log"))]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocPretranslate.LogCount")))
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.Text_Lambda([this]()
+					{
+						return FText::Format(LOCTEXT("LogCount", "{0} {0}|plural(one=line,other=lines), {1} {1}|plural(one=failure,other=failures)"), LogLines.Num(), LogFailures);
+					})
+				]
+			]
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(SCheckBox)
+			.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocPretranslate.LogFailuresOnly")))
+			.ToolTipText(LOCTEXT("FailuresOnlyTip", "Only what went wrong: requests that failed (and were sent again), texts that failed or the checks turned down"))
+			.IsChecked_Lambda([this]() { return bFailuresOnly ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+			.OnCheckStateChanged_Lambda([this](ECheckBoxState InState) { SetFailuresOnly(InState == ECheckBoxState::Checked); })
+			[
+				SNew(STextBlock).Text(LOCTEXT("FailuresOnly", "Failures only"))
+			]
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(SButton)
+			.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocPretranslate.LogCopy")))
+			.Text(LOCTEXT("LogCopy", "Copy"))
+			.ToolTipText(LOCTEXT("LogCopyTip", "Put the lines shown on the clipboard (Ctrl+C in the log: the lines selected)"))
+			.IsEnabled_Lambda([this]() { return !ShownLog.IsEmpty(); })
+			.OnClicked_Lambda([this]() { FPlatformApplicationMisc::ClipboardCopy(*GetLogText()); return FReply::Handled(); })
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(4.0f, 0.0f, 0.0f, 0.0f)
+		[
+			SNew(SButton)
+			.AddMetaData<FTagMetaData>(FTagMetaData(TEXT("DreamLocPretranslate.OpenReport")))
+			.Text_Lambda([this]()
+			{
+				return ReportPaths.Num() > 1 ? FText::Format(LOCTEXT("OpenReports", "Open the reports ({0})"), ReportPaths.Num()) : LOCTEXT("OpenReport", "Open the report");
+			})
+			.ToolTipText_Lambda([this]()
+			{
+				return ReportPaths.IsEmpty() ? LOCTEXT("NoReport", "A run writes its report (every entry, what came back and why) when it is done")
+					: FText::FromString(FString::Join(ReportPaths, TEXT("\n")));
+			})
+			.IsEnabled_Lambda([this]() { return !ReportPaths.IsEmpty(); })
+			.OnClicked_Lambda([this]() { OpenReports(); return FReply::Handled(); })
+		];
+}
+
+TSharedRef<ITableRow> SDreamLocPretranslateDialog::MakeLogRow(TSharedPtr<FDreamLocTranslateLogLine> InLine, const TSharedRef<STableViewBase>& InOwner)
+{
+	const FSlateColor Color = InLine->Level == EDreamLocTranslateLogLevel::Error ? FSlateColor(FStyleColors::Error)
+		: InLine->Level == EDreamLocTranslateLogLevel::Warning ? FSlateColor(FStyleColors::Warning) : FSlateColor::UseForeground();
+	return SNew(STableRow<TSharedPtr<FDreamLocTranslateLogLine>>, InOwner)
+		.Padding(FMargin(4.0f, 1.0f))
+		[
+			SNew(STextBlock)
+			.Font(FCoreStyle::GetDefaultFontStyle(TEXT("Mono"), 9))
+			.AutoWrapText(true)
+			.ColorAndOpacity(Color)
+			.Text(FText::FromString(InLine->Format()))
+		];
+}
+
+void SDreamLocPretranslateDialog::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+{
+	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+	ReadLog();
+}
+
+void SDreamLocPretranslateDialog::ReadLog()
+{
+	const TSharedPtr<SDreamLocTranslateWindow> Owner = Window.Pin();
+	if (!Owner.IsValid())
+	{
+		return;
+	}
+	bool bChanged = false;
+	if (Owner->GetRunNumber() != LogRun)
+	{
+		LogRun = Owner->GetRunNumber();
+		LogLines.Reset();
+		ShownLog.Reset();
+		LogFailures = 0;
+		ReportPaths.Reset();
+		bChanged = true;
+	}
+	TArray<FDreamLocTranslateLogLine> New;
+	Owner->ReadRunLog(LogLines.Num(), New);
+	for (FDreamLocTranslateLogLine& Line : New)
+	{
+		const TSharedPtr<FDreamLocTranslateLogLine> Shared = MakeShared<FDreamLocTranslateLogLine>(MoveTemp(Line));
+		LogLines.Add(Shared);
+		LogFailures += Shared->IsFailure() ? 1 : 0;
+		if (!bFailuresOnly || Shared->IsFailure())
+		{
+			ShownLog.Add(Shared);
+		}
+	}
+	// The reports once the run is done.
+	if (!Owner->IsRunning() && ReportPaths != Owner->GetLastResult().ReportPaths)
+	{
+		ReportPaths = Owner->GetLastResult().ReportPaths;
+	}
+	if ((bChanged || New.Num() > 0) && LogList.IsValid())
+	{
+		LogList->RequestListRefresh();
+		// Following the run, unless a line is selected: someone is reading.
+		if (ShownLog.Num() > 0 && LogList->GetNumItemsSelected() == 0)
+		{
+			LogList->RequestScrollIntoView(ShownLog.Last());
+		}
+	}
+}
+
+void SDreamLocPretranslateDialog::RebuildShownLog()
+{
+	ShownLog.Reset();
+	for (const TSharedPtr<FDreamLocTranslateLogLine>& Line : LogLines)
+	{
+		if (!bFailuresOnly || Line->IsFailure())
+		{
+			ShownLog.Add(Line);
+		}
+	}
+	if (LogList.IsValid())
+	{
+		LogList->ClearSelection();
+		LogList->RequestListRefresh();
+		if (ShownLog.Num() > 0)
+		{
+			LogList->RequestScrollIntoView(ShownLog.Last());
+		}
+	}
+}
+
+void SDreamLocPretranslateDialog::SetLogOpen(bool bInOpen)
+{
+	bLogOpen = bInOpen;
+}
+
+void SDreamLocPretranslateDialog::SetFailuresOnly(bool bInFailuresOnly)
+{
+	if (bFailuresOnly != bInFailuresOnly)
+	{
+		bFailuresOnly = bInFailuresOnly;
+		RebuildShownLog();
+	}
+}
+
+FString SDreamLocPretranslateDialog::JoinLines(TConstArrayView<TSharedPtr<FDreamLocTranslateLogLine>> InLines) const
+{
+	TArray<FString> Out;
+	for (const TSharedPtr<FDreamLocTranslateLogLine>& Line : InLines)
+	{
+		Out.Add(Line->Format());
+	}
+	return FString::Join(Out, TEXT("\n"));
+}
+
+FString SDreamLocPretranslateDialog::GetLogText() const
+{
+	return JoinLines(ShownLog);
+}
+
+FReply SDreamLocPretranslateDialog::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
+{
+	// Ctrl+C in the log: the lines selected, in the log's order.
+	if (InKeyEvent.GetKey() == EKeys::C && (InKeyEvent.IsControlDown() || InKeyEvent.IsCommandDown()) && LogList.IsValid() && LogList->GetNumItemsSelected() > 0)
+	{
+		TArray<TSharedPtr<FDreamLocTranslateLogLine>> Selected;
+		for (const TSharedPtr<FDreamLocTranslateLogLine>& Line : ShownLog)
+		{
+			if (LogList->IsItemSelected(Line))
+			{
+				Selected.Add(Line);
+			}
+		}
+		FPlatformApplicationMisc::ClipboardCopy(*JoinLines(Selected));
+		return FReply::Handled();
+	}
+	return SCompoundWidget::OnKeyDown(MyGeometry, InKeyEvent);
+}
+
+void SDreamLocPretranslateDialog::OpenReports() const
+{
+	for (const FString& Path : ReportPaths)
+	{
+		FPlatformProcess::LaunchFileInDefaultExternalApplication(*Path);
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

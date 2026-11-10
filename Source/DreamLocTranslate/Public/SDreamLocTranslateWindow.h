@@ -146,6 +146,10 @@ public:
 	float GetRunFraction() const;
 	const FDreamLocTranslateResult& GetLastResult() const { return LastResult; }
 	const TArray<FString>& GetLastErrors() const { return LastErrors; }
+	/** Which run the log is of: each run started, whatever started it, has the next number (0: none yet). */
+	int32 GetRunNumber() const { return RunNumber; }
+	/** The log of the run under way, else of the last one: its lines from InFrom on, added to OutLines. */
+	void ReadRunLog(int32 InFrom, TArray<FDreamLocTranslateLogLine>& OutLines) const;
 
 	/** Opens the AI pre-translate dialog; the dialog, for a test to drive. */
 	TSharedPtr<class SDreamLocPretranslateDialog> OpenPretranslate();
@@ -229,6 +233,7 @@ private:
 	TSharedPtr<STreeView<TSharedPtr<FDreamLocReviewFileNode>>> FileTree;
 
 	TSharedPtr<FRunState> Running;
+	int32 RunNumber = 0;
 	FDreamLocTranslateResult LastResult;
 	TArray<FString> LastErrors;
 	FText StatusText;

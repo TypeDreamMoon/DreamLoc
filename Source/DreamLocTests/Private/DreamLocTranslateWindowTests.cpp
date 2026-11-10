@@ -1371,4 +1371,119 @@ bool FDreamLocTranslateOwnerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace DreamLocTranslateWindowTestsLocal
+{
+	/** A menu the service translates and a story it turns down, as a relay without a session does. */
+	bool BeginTurnedDown(FAutomationTestBase& InTest, const FScenarioRef& InScenario, const TCHAR* InName)
+	{
+		if (!InScenario->Begin(InTest, InName))
+		{
+			return false;
+		}
+		InScenario->Write(TEXT("dloc.ini"), TEXT("[DreamLoc]\nSourceCulture=zh-Hans\nTargetCultures=en\n\n[Translate]\nProfile=model\nConcurrency=1\n"));
+		InScenario->Write(TEXT("en/UI/Menu.dloc"), MakeDloc(TEXT("en"), TEXT("Menu"), { { TEXT("Start"), TEXT("开始游戏") }, { TEXT("Quit"), TEXT("退出") } }));
+		InScenario->Write(TEXT("en/Story/Intro.dloc"), MakeDloc(TEXT("en"), TEXT("Intro"), { { TEXT("Line"), TEXT("很久以前") } }));
+		InTest.TestTrue(TEXT("the profiles saved where the test says"), DreamLocTranslateConfig::SaveProfiles({ InScenario->Fake->Profile(TEXT("OpenAI"), TEXT("model")) }));
+		InScenario->Fake->Chat = [](const DreamLocTranslateFake::FChat& InChat)
+		{
+			for (const TSharedPtr<FJsonObject>& Entry : InChat.Entries)
+			{
+				if (Entry->GetStringField(TEXT("ns")) == TEXT("Intro"))
+				{
+					DreamLocTranslateFake::FChatAnswer Answer;
+					Answer.Status = 400;
+					Answer.RawBody = TEXT("{\"error\":{\"message\":\"MissingSessionID\"}}");
+					return Answer;
+				}
+			}
+			return DreamLocTranslateFake::MarkAll(InChat);
+		};
+		return true;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FDreamLocTranslateRunLogTest, "DreamLoc.Translate.Window.TheDialogsLogSaysWhatEachRequestCameToAndWhyItFailed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+bool FDreamLocTranslateRunLogTest::RunTest(const FString& Parameters)
+{
+	using namespace DreamLocTranslateWindowTestsLocal;
+	const FScenarioRef S = MakeShared<FScenario, ESPMode::ThreadSafe>();
+	if (!BeginTurnedDown(*this, S, TEXT("TranslateRunLog")))
+	{
+		return false;
+	}
+
+	const FDeskRef D = MakeDesk(S);
+	TArray<TFunction<bool()>> Steps;
+	TSharedRef<TSharedPtr<SDreamLocPretranslateDialog>> Dialog = MakeShared<TSharedPtr<SDreamLocPretranslateDialog>>();
+	AddClick(*this, Steps, D, TEXT("AI pre-translate..."), [D]() { return D->Tagged(TEXT("DreamLocTranslate.Pretranslate")); });
+	AddCheck(Steps, D, [this, D, Dialog]()
+	{
+		*Dialog = D->Window->OpenPretranslate();
+		if (!TestTrue(TEXT("the dialog"), Dialog->IsValid()))
+		{
+			D->bFailed = true;
+			return;
+		}
+		TestTrue(TEXT("its log open"), (*Dialog)->IsLogOpen());
+		TestEqual(TEXT("nothing in it before a run"), (*Dialog)->GetLogLineCount(), 0);
+		TestFalse(TEXT("no report to open"), D->Tagged(TEXT("DreamLocPretranslate.OpenReport")).IsValid() && D->Tagged(TEXT("DreamLocPretranslate.OpenReport"))->IsEnabled());
+		TestTrue(TEXT("ready"), (*Dialog)->CanStart());
+	});
+	AddClick(*this, Steps, D, TEXT("the dialog's Translate"), [D]() { return D->Tagged(TEXT("DreamLocPretranslate.Start")); });
+	AddWait(*this, Steps, D, TEXT("the pre-translation"), 60.0, [D]() { return !D->Window->IsRunning(); });
+	AddCheck(Steps, D, [this, D, Dialog]()
+	{
+		const FString Log = (*Dialog)->GetLogText();
+		const FString Result = (*Dialog)->GetResultText().ToString();
+		TestTrue(FString::Printf(TEXT("the dialog says what came back, and where to look (%s)"), *Result),
+			Result.StartsWith(TEXT("Done: 2 translated, 1 failed, 0 skipped")) && Result.Contains(TEXT("The log below says why each failed.")));
+		TestTrue(FString::Printf(TEXT("the log: the request that came back (%s)"), *Log), Log.Contains(TEXT("en  UI/Menu.dloc  2 texts  model  ok")));
+		TestTrue(TEXT("the request turned down, and why"), Log.Contains(TEXT("en  Story/Intro.dloc  1 text  model  failed")) && Log.Contains(TEXT("HTTP 400: MissingSessionID")));
+		TestTrue(TEXT("what the culture came to"), Log.Contains(TEXT("DreamLoc translate en: 2 translated, 1 failed, 0 skipped")));
+		TestTrue(TEXT("each line with its time"), Log.Len() > 8 && Log[2] == TEXT(':') && Log[5] == TEXT(':'));
+		TestEqual(TEXT("every line of the run"), (*Dialog)->GetLogLineCount(), D->Window->GetLastResult().Log.Num());
+		TestEqual(TEXT("two say something went wrong: the request, and why the culture's entry failed"), (*Dialog)->GetLogFailureCount(), 2);
+		TestEqual(TEXT("its heading counts them"), TextUnder(D->Tagged(TEXT("DreamLocPretranslate.LogCount"))),
+			FString::Printf(TEXT("%d lines, 2 failures"), (*Dialog)->GetLogLineCount()));
+		const TSharedPtr<SWidget> Report = D->Tagged(TEXT("DreamLocPretranslate.OpenReport"));
+		TestTrue(TEXT("the report to open"), (*Dialog)->GetReportPaths().Num() == 1 && IFileManager::Get().FileExists(*(*Dialog)->GetReportPaths()[0]) && Report.IsValid() && Report->IsEnabled());
+	});
+	AddClick(*this, Steps, D, TEXT("Failures only"), [D]() { return D->Tagged(TEXT("DreamLocPretranslate.LogFailuresOnly")); });
+	AddCheck(Steps, D, [this, D, Dialog]()
+	{
+		TestTrue(TEXT("a click: the failures alone"), (*Dialog)->IsFailuresOnly());
+		const FString Log = (*Dialog)->GetLogText();
+		TestTrue(TEXT("the failure shown"), Log.Contains(TEXT("HTTP 400: MissingSessionID")));
+		TestFalse(TEXT("what went right not"), Log.Contains(TEXT("  ok  ")));
+		TArray<FString> Lines;
+		Log.ParseIntoArrayLines(Lines);
+		TestEqual(TEXT("a line for each failure"), Lines.Num(), (*Dialog)->GetLogFailureCount());
+	});
+	AddClick(*this, Steps, D, TEXT("the log's heading"), [D]() { return D->Tagged(TEXT("DreamLocPretranslate.LogToggle")); });
+	AddCheck(Steps, D, [this, D, Dialog]()
+	{
+		TestFalse(TEXT("a click folds it away"), (*Dialog)->IsLogOpen());
+		const TSharedPtr<SWidget> Lines = D->Tagged(TEXT("DreamLocPretranslate.Log"));
+		TestTrue(TEXT("the lines hidden"), Lines.IsValid() && Lines->GetVisibility() == EVisibility::Collapsed);
+	});
+	// A run started elsewhere (the list's menu): the log is of it, the dialog open meanwhile.
+	AddCheck(Steps, D, [this, D, Dialog]()
+	{
+		(*Dialog)->SetLogOpen(true);
+		(*Dialog)->SetFailuresOnly(false);
+		TestTrue(TEXT("the story's line translated from the list"), D->Window->TranslateEntries({ D->Window->GetModel().Find(TEXT("Intro"), TEXT("Line")) }, FString()));
+	});
+	AddWait(*this, Steps, D, TEXT("the run from the list"), 60.0, [D]() { return !D->Window->IsRunning(); });
+	AddCheck(Steps, D, [this, D, Dialog]()
+	{
+		const FString Log = (*Dialog)->GetLogText();
+		TestTrue(FString::Printf(TEXT("the new run's lines (%s)"), *Log), Log.Contains(TEXT("DreamLoc translate en: 0 translated, 1 failed, 0 skipped")));
+		TestFalse(TEXT("the last run's gone"), Log.Contains(TEXT("UI/Menu.dloc  2 texts")));
+	});
+	AddEnd(Steps, D);
+	ADD_LATENT_AUTOMATION_COMMAND(FSteps(MoveTemp(Steps)));
+	return true;
+}
+
 #endif

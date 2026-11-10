@@ -214,6 +214,20 @@ edited (`draft`) or translated again, a double click opens the `.dloc` at the en
 already in the files load into it for review without a run. A report of each run goes to
 `Saved/DLoc/translate-<culture>-<time>.json`.
 
+Every run keeps a log as it goes, which the "AI pre-translate..." dialog shows under its progress bar. Each request
+gets a line when it comes back: the file, how many texts, the translator, ok or failed, the seconds and the tokens. A
+prompt cut to a local model's context shows up in the token count. Failures and texts get lines of their own:
+
+- a failed request: the service's status and words (`HTTP 400: ...`), or how an answer that does not read began, and
+  whether it was sent again;
+- a text that failed or that the checks turned down: what the checks said (`DLOC2001 ...`), its source and the
+  translation they turned down;
+- each culture's end: what it came to, its failures counted by reason, and where its report is.
+
+The log folds away, can show only the failures, and copies to the clipboard (Copy takes the lines shown, Ctrl+C the
+lines selected). "Open the report" opens the report once the run is done. The same lines go to `LogDreamLocTranslate`
+(Display, and Warning for what went wrong) and into the report's `log`.
+
 Translators are set up once per user in `%APPDATA%/DreamLoc/translators.ini` (the **Translators** page edits it and
 tests each), never in the project, since keys live there:
 

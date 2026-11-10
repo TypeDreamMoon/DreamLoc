@@ -56,6 +56,8 @@ struct SDreamLocTranslateWindow::FRunState
 	TAtomic<bool> Cancel{ false };
 	FCriticalSection Lock;
 	FDreamLocTranslateProgress Progress;
+	/** The run's log as it is written, from its threads. */
+	TArray<FDreamLocTranslateLogLine> Log;
 };
 
 namespace DreamLocTranslateWindowLocal
@@ -1155,6 +1157,7 @@ bool SDreamLocTranslateWindow::StartRun(const FDreamLocTranslateRequest& InReque
 	}
 	const TSharedRef<FRunState> State = MakeShared<FRunState>();
 	Running = State;
+	++RunNumber;
 	StatusText = LOCTEXT("Translating", "Translating...");
 	const TWeakPtr<SDreamLocTranslateWindow> Weak = SharedThis(this);
 	Async(EAsyncExecution::Thread, [State, InRequest, Weak, InOnDone]()
@@ -1163,7 +1166,11 @@ bool SDreamLocTranslateWindow::StartRun(const FDreamLocTranslateRequest& InReque
 		{
 			FScopeLock Lock(&State->Lock);
 			State->Progress = InProgress;
-		}, State->Cancel);
+		}, State->Cancel, [State](const FDreamLocTranslateLogLine& InLine)
+		{
+			FScopeLock Lock(&State->Lock);
+			State->Log.Add(InLine);
+		});
 		AsyncTask(ENamedThreads::GameThread, [Weak, Result = MoveTemp(Result), InOnDone]()
 		{
 			if (const TSharedPtr<SDreamLocTranslateWindow> Window = Weak.Pin())
@@ -1223,6 +1230,26 @@ float SDreamLocTranslateWindow::GetRunFraction() const
 	return Running->Progress.Batches > 0 ? float(Running->Progress.BatchesDone) / float(Running->Progress.Batches) : 0.0f;
 }
 
+void SDreamLocTranslateWindow::ReadRunLog(int32 InFrom, TArray<FDreamLocTranslateLogLine>& OutLines) const
+{
+	auto Read = [InFrom, &OutLines](const TArray<FDreamLocTranslateLogLine>& InLog)
+	{
+		for (int32 Index = FMath::Max(0, InFrom); Index < InLog.Num(); ++Index)
+		{
+			OutLines.Add(InLog[Index]);
+		}
+	};
+	if (Running.IsValid())
+	{
+		FScopeLock Lock(&Running->Lock);
+		Read(Running->Log);
+	}
+	else
+	{
+		Read(LastResult.Log);
+	}
+}
+
 TSharedPtr<SDreamLocPretranslateDialog> SDreamLocTranslateWindow::OpenPretranslate()
 {
 	if (const TSharedPtr<SWindow> Open = PretranslateWindow.Pin())
@@ -1236,7 +1263,7 @@ TSharedPtr<SDreamLocPretranslateDialog> SDreamLocTranslateWindow::OpenPretransla
 	const bool bQuiet = Parent.IsValid() && Parent->ActivationPolicy() == EWindowActivationPolicy::Never;
 	const TSharedRef<SWindow> Window = SNew(SWindow)
 		.Title(LOCTEXT("PretranslateTitle", "AI pre-translate"))
-		.ClientSize(FVector2D(560.0, 480.0))
+		.ClientSize(FVector2D(680.0, 720.0))
 		.SupportsMaximize(false)
 		.SupportsMinimize(false)
 		.ActivationPolicy(bQuiet ? EWindowActivationPolicy::Never : EWindowActivationPolicy::Always)
