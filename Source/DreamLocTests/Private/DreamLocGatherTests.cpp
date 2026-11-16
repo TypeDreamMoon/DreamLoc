@@ -126,6 +126,27 @@ bool FDreamLocGatherMetaDataTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("an enum value's kind: a display name like any other, so one source is sent once"), Value->Kind, FString(TEXT("display name")));
 	}
 
+	// A function is gathered only where its header writes a DisplayName; the editor otherwise shows its own name,
+	// prettified, and that name has to be a text like any other or no translation can ever reach a node title.
+	const UFunction* Lamp = Class->FindFunctionByName(TEXT("ToggleSampleLamp"));
+	const UFunction* Flag = Class->FindFunctionByName(TEXT("RaiseSampleFlag"));
+	if (!TestTrue(TEXT("the sample's functions"), Lamp != nullptr && Flag != nullptr))
+	{
+		return false;
+	}
+	TestEqual(TEXT("a function without a display name gets the one the editor computes"),
+		SourceOf(Manifest, TEXT("UObjectDisplayNames"), Lamp->GetFullGroupName(false)), FString(TEXT("Toggle Sample Lamp")));
+	TestEqual(TEXT("a function that writes one keeps its own"),
+		SourceOf(Manifest, TEXT("UObjectDisplayNames"), Flag->GetFullGroupName(false)), FString(TEXT("Raise the Sample Flag")));
+	TestEqual(TEXT("and the fallback is not written beside it"),
+		CountEntries(Manifest, TEXT("UObjectDisplayNames"), Flag->GetFullGroupName(false)), 1);
+	const FDreamLocExtractEntry* LampEntry = FindEntry(Manifest, TEXT("UObjectDisplayNames"), Lamp->GetFullGroupName(false));
+	if (TestNotNull(TEXT("the fallback's entry"), LampEntry))
+	{
+		TestEqual(TEXT("where it is: the function, without the module"), LampEntry->At, FString(TEXT("DreamLocMetaDataSample:ToggleSampleLamp")));
+		TestEqual(TEXT("what it is, for the translator"), LampEntry->Kind, FString(TEXT("display name")));
+	}
+
 	// Without MetaData: the LOCTEXT alone.
 	Options.bMetaData = false;
 	const DreamLocEngine::FGatherResult Plain = DreamLocEngine::Gather(Options);
