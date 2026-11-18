@@ -35,6 +35,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Sample", meta = (ShortTooltip = "How it fits"))
 	EDreamLocSampleFit Fit = EDreamLocSampleFit::Fill;
 
+	/** A function the editor names by itself: no DisplayName meta-data, so only the fallback name exists. */
+	UFUNCTION()
+	void ToggleSampleLamp(bool bOn) {}
+
+	/** A function that does write one: its own entry, and never the fallback beside it. */
+	UFUNCTION(meta = (DisplayName = "Raise the Sample Flag"))
+	void RaiseSampleFlag() {}
+
 	/** A LOCTEXT beside the meta-data: the gather puts both into this header's manifest. */
 	static FText GetTitle() { return NSLOCTEXT("DreamLocSample", "Title", "Sample Panel Title"); }
 };

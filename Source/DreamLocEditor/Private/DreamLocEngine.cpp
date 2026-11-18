@@ -17,6 +17,8 @@
 #include "Misc/Paths.h"
 #include "SourceCodeNavigation.h"
 #include "UObject/Package.h"
+#include "UObject/UObjectIterator.h"
+#include "UObject/UnrealType.h"
 
 namespace DreamLocEngineLocal
 {
@@ -100,8 +102,10 @@ namespace DreamLocEngineLocal
 	 * value's `/Script/DreamGUI.EDreamFit:Fill [EnumEntry DisplayName meta-data]` -- as the header the type is declared
 	 * in, the field (`DreamCanvas:SortOrder`) and what the text is (`tooltip`).
 	 */
-	bool SplitScript(const FString& InLocation, const FString& InProjectDirectory, FString& OutFile, FString& OutWhere, FString& OutKind)
+	bool SplitScript(const FString& InLocation, const FString& InProjectDirectory, FString& OutFile, FString& OutWhere, FString& OutKind,
+		UClass*& OutOwner)
 	{
+		OutOwner = nullptr;
 		if (!InLocation.StartsWith(TEXT("/Script/")))
 		{
 			return false;
@@ -130,11 +134,18 @@ namespace DreamLocEngineLocal
 		// enum value's own name comes after it).
 		int32 Colon = INDEX_NONE;
 		const FString TypePath = Path.FindChar(TEXT(':'), Colon) ? Path.Left(Colon) : Path;
-		const UField* Type = FindObject<UField>(nullptr, *TypePath);
+		UField* Type = FindObject<UField>(nullptr, *TypePath);
 		FString Header;
 		if (Type == nullptr || !FSourceCodeNavigation::FindClassHeaderPath(Type, Header))
 		{
 			return false;
+		}
+		// The class a field belongs to: the field itself when it is a class, its outer when it is an enum value.
+		// What the fallback function names below are written for.
+		OutOwner = Cast<UClass>(Type);
+		if (OutOwner == nullptr)
+		{
+			OutOwner = Cast<UClass>(Type->GetOuter());
 		}
 		OutFile = RelativeTo(FPaths::ConvertRelativePathToFull(Header), InProjectDirectory);
 		int32 Dot = INDEX_NONE;
@@ -302,6 +313,8 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 	// A text once per file: a category is one text however many fields of a header are in it. (The same key with
 	// another source stays, for sync to warn of.)
 	TSet<FString> Seen;
+	// The types whose meta-data this gather read: the ones to write the fallback function names for, below.
+	TSet<UClass*> TypesWithMetaData;
 	Helper.EnumerateSourceTexts([&](TSharedRef<FManifestEntry> InEntry) -> bool
 	{
 		for (const FManifestContext& Context : InEntry->Contexts)
@@ -310,7 +323,9 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 			FString Where;
 			FString Kind;
 			int32 Line = 0;
-			if (!SplitAsset(Context.SourceLocation, Project, File, Where) && !SplitScript(Context.SourceLocation, Project, File, Where, Kind))
+			UClass* MetadataOwner = nullptr;
+			if (!SplitAsset(Context.SourceLocation, Project, File, Where)
+				&& !SplitScript(Context.SourceLocation, Project, File, Where, Kind, MetadataOwner))
 			{
 				SplitLine(Context.SourceLocation, File, Line);
 				File = RelativeTo(FPaths::IsRelative(File) ? SourceBase / File : File, Project);
@@ -319,6 +334,10 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 			if (File.IsEmpty())
 			{
 				continue;
+			}
+			if (MetadataOwner != nullptr)
+			{
+				TypesWithMetaData.Add(MetadataOwner);
 			}
 			FGathered Gathered;
 			Gathered.Namespace = InEntry->Namespace.GetString();
@@ -342,6 +361,64 @@ bool DreamLocEngine::ReadGatherManifest(const FString& InManifestPath, const FSt
 		}
 		return true;
 	}, /*bCheckDependencies*/ false);
+
+	// A function has a display-name text only where its header writes `meta = (DisplayName = "...")`. Every other
+	// function falls back to its own name, prettified (ObjectTools::GetUserFacingFunctionName, which is what a
+	// blueprint node title asks the live table for). A name computed at runtime is a source text no manifest holds,
+	// so it can never be translated: that is why a plugin whose details panel reads Chinese still shows English node
+	// titles. Write that fallback here -- for the types this gather read, under the key the lookup is made with
+	// (`<Type>:<Function>`, what GetFullGroupName(false) gives a function) and in the header the type is declared in.
+	// A function that writes a DisplayName already has its entry, from the gather, and is left alone.
+	for (UClass* Type : TypesWithMetaData)
+	{
+		FString Header;
+		if (!IsValid(Type) || !FSourceCodeNavigation::FindClassHeaderPath(Type, Header))
+		{
+			continue;
+		}
+		const FString File = RelativeTo(FPaths::ConvertRelativePathToFull(Header), Project);
+		if (File.IsEmpty())
+		{
+			continue;
+		}
+		if (!ByFile.Contains(File))
+		{
+			FileOrder.Add(File);
+		}
+		TArray<FGathered>& Texts = ByFile.FindOrAdd(File);
+		for (TFieldIterator<UFunction> It(Type, EFieldIteratorFlags::ExcludeSuper); It; ++It)
+		{
+			UFunction* Function = *It;
+			const FString FunctionName = Function->GetName();
+			// A delegate signature function is not a node; the delegate property carries the texts that matter.
+			if (Function->HasAnyFunctionFlags(FUNC_Delegate) || FunctionName.EndsWith(TEXT("__DelegateSignature")))
+			{
+				continue;
+			}
+			const FString Key = FString::Printf(TEXT("%s:%s"), *Type->GetName(), *FunctionName);
+			const bool bAlreadyGathered = Texts.ContainsByPredicate([&Key](const FGathered& InText)
+			{
+				return InText.Namespace == TEXT("UObjectDisplayNames") && InText.Entry.Key == Key;
+			});
+			if (bAlreadyGathered)
+			{
+				continue;
+			}
+			static const FName DisplayNameKey(TEXT("DisplayName"));
+			FString Source = Function->GetMetaData(DisplayNameKey);
+			if (Source.IsEmpty())
+			{
+				Source = FName::NameToDisplayString(FunctionName, /*bIsBool*/ false);
+			}
+			FGathered Gathered;
+			Gathered.Namespace = TEXT("UObjectDisplayNames");
+			Gathered.Entry.Key = Key;
+			Gathered.Entry.Source = MoveTemp(Source);
+			Gathered.Entry.At = Key;
+			Gathered.Entry.Kind = TEXT("display name");
+			Texts.Add(MoveTemp(Gathered));
+		}
+	}
 
 	FileOrder.Sort();
 	for (const FString& File : FileOrder)
